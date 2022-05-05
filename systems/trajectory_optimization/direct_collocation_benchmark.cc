@@ -37,7 +37,7 @@ static void IiwaDirectCollocation(benchmark::State& state) {
   plant.Finalize();
 
   auto context = plant.CreateDefaultContext();
-  const int kNumTimeSteps{21};
+  const int kNumTimeSteps{11};
   const double kMinTimeStep{0.1};
   const double kMaxTimeStep{0.4};
 
@@ -48,8 +48,8 @@ static void IiwaDirectCollocation(benchmark::State& state) {
                              plant.get_actuation_input_port().get_index());
     solvers::MathematicalProgram& prog = dircol.prog();
 
-    const VectorXDecisionVariable& u = dircol.input();
-    const VectorXDecisionVariable& x = dircol.state();
+    // const VectorXDecisionVariable& u = dircol.input();
+    // const VectorXDecisionVariable& x = dircol.state();
 
     dircol.AddEqualTimeIntervalsConstraints();
 
@@ -85,10 +85,10 @@ static void IiwaDirectCollocation(benchmark::State& state) {
                                                 plant.GetEffortUpperLimits()),
         dircol.input());
 
-    // Cost on input "effort".
-    dircol.AddRunningCost(10 * u.cast<Expression>().squaredNorm());
-    // Cost on velocity.
-    dircol.AddRunningCost(x.tail<7>().cast<Expression>().squaredNorm());
+    // // Cost on input "effort".
+    // dircol.AddRunningCost(10 * u.cast<Expression>().squaredNorm());
+    // // Cost on velocity.
+    // dircol.AddRunningCost(x.tail<7>().cast<Expression>().squaredNorm());
     // Cost on the total duration.
     dircol.AddFinalCost(dircol.time().cast<Expression>());
 
