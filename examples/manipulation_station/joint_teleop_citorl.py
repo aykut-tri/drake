@@ -111,15 +111,15 @@ def main():
         url = meshcat.web_url()
         webbrowser.open(url=url, new=args.browser_new)
 
-    teleop = builder.AddSystem(JointSliders(
-        meshcat=meshcat, plant=station.get_controller_plant()))
+    # teleop = builder.AddSystem(JointSliders(
+    #     meshcat=meshcat, plant=station.get_controller_plant()))
 
     num_iiwa_joints = station.num_iiwa_joints()
-    filter = builder.AddSystem(FirstOrderLowPassFilter(
-        time_constant=2.0, size=num_iiwa_joints))
-    builder.Connect(teleop.get_output_port(0), filter.get_input_port(0))
-    builder.Connect(filter.get_output_port(0),
-                    station.GetInputPort("iiwa_position"))
+    # filter = builder.AddSystem(FirstOrderLowPassFilter(
+    #     time_constant=2.0, size=num_iiwa_joints))
+    # builder.Connect(teleop.get_output_port(0), filter.get_input_port(0))
+    # builder.Connect(filter.get_output_port(0),
+    #                 station.GetInputPort("iiwa_position"))
 
     # wsg_buttons = builder.AddSystem(SchunkWsgButtons(meshcat=meshcat))
     # builder.Connect(wsg_buttons.GetOutputPort("position"),
@@ -144,6 +144,14 @@ def main():
 
     station_context = diagram.GetMutableSubsystemContext(
         station, simulator.get_mutable_context())
+
+    # Set the joint pose.
+    station.GetInputPort("iiwa_position").FixValue(
+        station_context, np.array([0, 0.75, 0, -1.9, 0, -1, 0]))
+    # station.GetInputPort("iiwa_position").FixValue(
+    #     station_context, np.array([0, 0.5, 0, -1.5, 0, -0.5, 0]))
+    # station.GetInputPort("iiwa_position").FixValue(
+    #     station_context, np.zeros(num_iiwa_joints))
 
     station.GetInputPort("iiwa_feedforward_torque").FixValue(
         station_context, np.zeros(num_iiwa_joints))
