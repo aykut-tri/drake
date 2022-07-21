@@ -1,21 +1,14 @@
 import argparse
-import os
-import sys
 import webbrowser
 
 import numpy as np
 
 from pydrake.examples import (
     ManipulationStation, ManipulationStationHardwareInterface,
-    CreateClutterClearingYcbObjectList, SchunkCollisionModel)
+    SchunkCollisionModel)
 from pydrake.geometry import DrakeVisualizer, Meshcat, MeshcatVisualizer
-from pydrake.multibody.plant import MultibodyPlant
-from pydrake.manipulation.planner import (
-    DifferentialInverseKinematicsParameters)
-from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
 from pydrake.systems.analysis import Simulator
-from pydrake.systems.framework import DiagramBuilder, LeafSystem
-from pydrake.systems.primitives import FirstOrderLowPassFilter
+from pydrake.systems.framework import DiagramBuilder
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -31,30 +24,11 @@ def main():
         help="Use the ManipulationStationHardwareInterface instead of an "
              "in-process simulation.")
     parser.add_argument(
-        "--test", action='store_true',
-        help="Disable opening the gui window for testing.")
-    parser.add_argument(
-        "--filter_time_const", type=float, default=0.005,
-        help="Time constant for the first order low pass filter applied to"
-             "the teleop commands")
-    parser.add_argument(
-        "--velocity_limit_factor", type=float, default=1.0,
-        help="This value, typically between 0 and 1, further limits the "
-             "iiwa14 joint velocities. It multiplies each of the seven "
-             "pre-defined joint velocity limits. "
-             "Note: The pre-defined velocity limits are specified by "
-             "iiwa14_velocity_limits, found in this python file.")
-    parser.add_argument(
-        '--setup', type=str, default='manipulation_class',
-        help="The manipulation station setup to simulate. ",
-        choices=['manipulation_class', 'clutter_clearing'])
-    parser.add_argument(
-        '--schunk_collision_model', type=str, default='box',
-        help="The Schunk collision model to use for simulation. ",
-        choices=['box', 'box_plus_fingertip_spheres'])
-    parser.add_argument(
         "--meshcat", action="store_true", default=False,
         help="Enable visualization with meshcat.")
+    parser.add_argument(
+        "--planar", action="store_true", default=False,
+        help="Enable planar view.")
     parser.add_argument(
         "-w", "--open-window", dest="browser_new",
         action="store_const", const=1, default=None,
@@ -69,26 +43,10 @@ def main():
     else:
         station = builder.AddSystem(ManipulationStation())
 
-        if args.schunk_collision_model == "box":
-            schunk_model = SchunkCollisionModel.kBox
-        elif args.schunk_collision_model == "box_plus_fingertip_spheres":
-            schunk_model = SchunkCollisionModel.kBoxPlusFingertipSpheres
-
         # Initializes the chosen station type.
-        if args.setup == 'manipulation_class':
-            station.SetupManipulationClassStation(
-                schunk_model=schunk_model)
-            station.AddManipulandFromFile(
-                ("drake/examples/manipulation_station/models/"
-                 "061_foam_brick.sdf"),
-                RigidTransform(RotationMatrix.Identity(), [0.6, 0, 0]))
-        elif args.setup == 'clutter_clearing':
-            station.SetupClutterClearingStation(
-                schunk_model=schunk_model)
-
-            ycb_objects = CreateClutterClearingYcbObjectList()
-            for model_file, X_WObject in ycb_objects:
-                station.AddManipulandFromFile(model_file, X_WObject)
+        schunk_model = SchunkCollisionModel.kBoxPlusFingertipSpheres
+        station.SetupManipulationClassStation(
+            schunk_model=schunk_model)
 
         station.Finalize()
         query_port = station.GetOutputPort("query_object")
@@ -101,46 +59,14 @@ def main():
                 query_object_port=query_port,
                 meshcat=meshcat)
 
-            if args.setup == 'planar':
+            if args.planar:
                 meshcat.Set2dRenderMode()
 
             if args.browser_new is not None:
                 url = meshcat.web_url()
                 webbrowser.open(url=url, new=args.browser_new)
 
-    robot = station.get_controller_plant()
-    params = DifferentialInverseKinematicsParameters(robot.num_positions(),
-                                                     robot.num_velocities())
-
-    time_step = 0.005
-    params.set_timestep(time_step)
-    # True velocity limits for the IIWA14 (in rad, rounded down to the first
-    # decimal)
-    iiwa14_velocity_limits = np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
-    # Stay within a small fraction of those limits for this teleop demo.
-    factor = args.velocity_limit_factor
-    params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
-                                      factor*iiwa14_velocity_limits))
-
-    differential_ik = builder.AddSystem(DifferentialIK(
-        robot, robot.GetFrameByName("iiwa_link_7"), params, time_step))
-
-    builder.Connect(differential_ik.GetOutputPort("joint_position_desired"),
-                    station.GetInputPort("iiwa_position"))
-
-    teleop = builder.AddSystem(MouseKeyboardTeleop(grab_focus=grab_focus))
-    filter_ = builder.AddSystem(
-        FirstOrderLowPassFilter(time_constant=args.filter_time_const, size=6))
-
-    builder.Connect(teleop.get_output_port(0), filter_.get_input_port(0))
-    builder.Connect(filter_.get_output_port(0),
-                    differential_ik.GetInputPort("rpy_xyz_desired"))
-
-    builder.Connect(teleop.GetOutputPort("position"), station.GetInputPort(
-        "wsg_position"))
-    builder.Connect(teleop.GetOutputPort("force_limit"),
-                    station.GetInputPort("wsg_force_limit"))
-
+    # Create a diagram and a corresponding simulation.
     diagram = builder.Build()
     simulator = Simulator(diagram)
 
@@ -150,6 +76,15 @@ def main():
     station_context = diagram.GetMutableSubsystemContext(
         station, simulator.get_mutable_context())
 
+    # Set the joint pose command.
+    station.GetInputPort("iiwa_position").FixValue(
+        station_context, np.array([0, 0.75, 0, -1.9, 0, -1, 0]))
+
+    # Fix the gripper at open position.
+    station.GetInputPort("wsg_position").FixValue(
+        station_context, 0.1)
+
+    # Set the feed-forward toque to zero.
     station.GetInputPort("iiwa_feedforward_torque").FixValue(
         station_context, np.zeros(7))
 
@@ -161,21 +96,10 @@ def main():
     if args.hardware:
         simulator.AdvanceTo(1e-6)
 
-    q0 = station.GetOutputPort("iiwa_position_measured").Eval(station_context)
-    differential_ik.parameters.set_nominal_joint_position(q0)
-
-    teleop.SetPose(differential_ik.ForwardKinematics(q0))
-    filter_.set_initial_output_value(
-        diagram.GetMutableSubsystemContext(
-            filter_, simulator.get_mutable_context()),
-        teleop.get_output_port(0).Eval(diagram.GetMutableSubsystemContext(
-            teleop, simulator.get_mutable_context())))
-    differential_ik.SetPositions(diagram.GetMutableSubsystemContext(
-        differential_ik, simulator.get_mutable_context()), q0)
+    station.GetOutputPort("iiwa_position_measured").Eval(station_context)
 
     simulator.set_target_realtime_rate(args.target_realtime_rate)
 
-    print_instructions()
     simulator.AdvanceTo(args.duration)
 
 
