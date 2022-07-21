@@ -252,6 +252,14 @@ drake_py_binary(
     ],
 )
 
+drake_py_binary(
+    name = "send_joint_pose",
+    srcs = ["send_joint_pose.py"],
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
 install_data()
 
 add_lint_tests()
