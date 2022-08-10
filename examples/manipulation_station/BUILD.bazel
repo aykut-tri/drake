@@ -160,7 +160,7 @@ drake_cc_googletest(
 drake_py_library(
     name = "differential_ik",
     srcs = ["differential_ik.py"],
-    visibility = ["//visibility:private"],
+    visibility = ["//visibility:public"],
     deps = [
         "//bindings/pydrake",
     ],
