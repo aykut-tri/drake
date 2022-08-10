@@ -5,91 +5,45 @@ a rigid chair, and rigid floor.
 It uses an inverse dynamics controller to bring the noodleman from a sitting to standing up position.
 """
 import argparse
-from ast import IfExp
 import numpy as np
-import pdb
-import time
-from pydrake.common import FindResourceOrThrow
-from pydrake.geometry import DrakeVisualizer
 from pydrake.math import RigidTransform
 from pydrake.math import RollPitchYaw
 from pydrake.multibody.parsing import Parser
-from pydrake.multibody.plant import AddMultibodyPlant, AddMultibodyPlantSceneGraph
-from pydrake.multibody.plant import ConnectContactResultsToDrakeVisualizer
-from pydrake.multibody.plant import MultibodyPlantConfig
 from pydrake.systems.analysis import ApplySimulatorConfig
 from pydrake.systems.analysis import Simulator
 from pydrake.systems.analysis import SimulatorConfig
-from pydrake.systems.analysis import PrintSimulatorStatistics
 from pydrake.systems.framework import DiagramBuilder
-from pydrake.systems.primitives import VectorLogSink
-from pydrake.systems.controllers import InverseDynamicsController
 from pydrake.all import (DiagramBuilder,Parser,
                          RigidTransform, Simulator)
-from pydrake.systems.primitives import ConstantVectorSource
-from pydrake.multibody.tree import WeldJoint, RevoluteJoint, PrismaticJoint
 from pydrake.systems.drawing import plot_graphviz, plot_system_graphviz
 import matplotlib.pyplot as plt
 from pydrake.common.value import AbstractValue
-from drake.examples.ruxid.manipulation_station_sim.differential_ik import DifferentialIK
+from drake.examples.manipulation_station.differential_ik import DifferentialIK
 from pydrake.manipulation.planner import (
     DifferentialInverseKinematicsParameters)
 import pydrake.geometry as mut
 from pydrake.all import (
-    AddMultibodyPlantSceneGraph,
     Box,
-    ConstantVectorSource,
-    ContactVisualizer,
-    ContactVisualizerParams,
     DiagramBuilder,
-    EventStatus,
-    FixedOffsetFrame,
-    InverseDynamicsController,
-    InverseDynamics,
-    PidController,
     LeafSystem,
-    MeshcatVisualizerCpp,
-    MeshcatVisualizerParams,
-    MultibodyPlant,
-    MultibodyPositionToGeometryPose,
-    Multiplexer,
     Parser,
     PassThrough,
-    PlanarJoint,
-    ContactModel,
-    PrismaticJoint,
-    RandomGenerator,
-    Rgba,
     RigidTransform,
     RotationMatrix,
-    SceneGraph,
     Simulator,
-    SpatialInertia,
-    Sphere,
-    UnitInertia,
-    Variable,
-    JointIndex,
-    RandomGenerator,
-    PositionConstraint,
-    MultibodyForces,
     Box,
     Meshcat,
     MeshcatVisualizer,
-    FindResourceOrThrow,
-    TriggerType,
     PublishEvent,
-    FramePoseVector,
 )
 from pydrake.examples import (
-    CreateClutterClearingYcbObjectList, ManipulationStation,
+    ManipulationStation,
     ManipulationStationHardwareInterface)
 
-from utils import (FindResource, MakeNamedViewPositions, 
-        MakeNamedViewVelocities,
+from utils import (FindResource, MakeNamedViewPositions,
         MakeNamedViewState,
         MakeNamedViewActuation,
         AddShape,
-        SetColor
         )
 
 ## Env parameters
