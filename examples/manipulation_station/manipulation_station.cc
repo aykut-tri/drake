@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 #include <utility>
-
+#include <iostream>
 #include "drake/common/find_resource.h"
 #include "drake/geometry/render_vtk/factory.h"
 #include "drake/manipulation/schunk_wsg/schunk_wsg_constants.h"
@@ -12,6 +12,7 @@
 #include "drake/math/rigid_transform.h"
 #include "drake/math/rotation_matrix.h"
 #include "drake/multibody/parsing/parser.h"
+#include "drake/geometry/kinematics_vector.h"
 #include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/multibody/tree/revolute_joint.h"
 #include "drake/perception/depth_image_to_point_cloud.h"
@@ -45,8 +46,41 @@ using multibody::MultibodyPlant;
 using multibody::PrismaticJoint;
 using multibody::RevoluteJoint;
 using multibody::SpatialInertia;
+using multibody::ContactModel;
+using multibody::DiscreteContactSolver;
+using systems::Context;
 
 namespace internal {
+
+template <typename T>
+
+class ManipulandPoseExtractor final : public systems::LeafSystem<T> {
+ public:
+  explicit ManipulandPoseExtractor(const MultibodyPlant<T>* mbp)
+      : mbp_(mbp) {
+    input_ = &this->DeclareAbstractInputPort(
+        "geometry_pose", Value<geometry::FramePoseVector<T>>());
+    this->DeclareAbstractOutputPort(
+        "output", &ManipulandPoseExtractor<T>::Extractor);
+  }
+  void Extractor(const Context<T>& context,
+                 math::RigidTransform<T>* output) const {
+    const geometry::FramePoseVector<T>& geometry_poses =
+        input_->Eval<geometry::FramePoseVector<T>>(context);
+    geometry::FrameId frame_id =
+        mbp_->GetBodyFrameIdOrThrow(
+            mbp_->GetBodyByName("base_link",
+                               mbp_->GetModelInstanceByName("box")).index());
+    *output = geometry_poses.value(frame_id);
+  }
+
+ private:
+  const MultibodyPlant<T>* mbp_;
+  // TODO(sammy-tri) Why in the heck can't I declare this as an InputPort<T>??
+  const systems::InputPort<double>* input_{};
+ 
+};
+
 
 // TODO(amcastro-tri): Refactor this into schunk_wsg directory, and cover it
 // with a unit test.  Potentially tighten the tolerance in
@@ -196,7 +230,7 @@ MakeD415CameraModel(const std::string& renderer_name) {
 }  // namespace internal
 
 template <typename T>
-ManipulationStation<T>::ManipulationStation(double time_step)
+ManipulationStation<T>::ManipulationStation(double time_step, std::string contact_model, std::string contact_solver)
     : owned_plant_(std::make_unique<MultibodyPlant<T>>(time_step)),
       owned_scene_graph_(std::make_unique<SceneGraph<T>>()),
       // Given the controller does not compute accelerations, it is irrelevant
@@ -212,15 +246,36 @@ ManipulationStation<T>::ManipulationStation(double time_step)
   scene_graph_->set_name("scene_graph");
   plant_->set_name("plant");
 
+  // plant_->set_discrete_contact_solver(DiscreteContactSolver::kTamsi);
+  //plant_->set_contact_model(ContactModel::kHydroelasticWithFallback);
+  if (contact_solver == "sap") {
+    plant_->set_discrete_contact_solver(DiscreteContactSolver::kSap);
+  } else if (contact_solver == "tamsi") {
+    plant_->set_discrete_contact_solver(DiscreteContactSolver::kTamsi);
+  } else {
+    throw std::runtime_error("Invalid contact solver '" + contact_solver +
+                             "'.");
+  }
+  if (contact_model == "hydroelastic") {
+    plant_->set_contact_model(ContactModel::kHydroelastic);
+  } else if (contact_model == "point") {
+    plant_->set_contact_model(ContactModel::kPoint);
+  } else if (contact_model == "hydroelastic_with_fallback") {
+    plant_->set_contact_model(ContactModel::kHydroelasticWithFallback);
+  } else {
+    throw std::runtime_error("Invalid contact model '" + contact_model +
+                             "'.");
+  }
+
   this->set_name("manipulation_station");
 }
 
 template <typename T>
 void ManipulationStation<T>::AddManipulandFromFile(
-    const std::string& model_file, const RigidTransform<double>& X_WObject) {
+    const std::string& model_file, const RigidTransform<double>& X_WObject, std::string manipuland_name) {
   multibody::Parser parser(plant_);
   const auto model_index =
-      parser.AddModelFromFile(FindResourceOrThrow(model_file));
+      parser.AddModelFromFile(FindResourceOrThrow(model_file),manipuland_name);
   const auto indices = plant_->GetBodyIndices(model_index);
   // Only support single-body objects for now.
   // Note: this could be generalized fairly easily... would just want to
@@ -229,6 +284,32 @@ void ManipulationStation<T>::AddManipulandFromFile(
   object_ids_.push_back(indices[0]);
 
   object_poses_.push_back(X_WObject);
+}
+
+template <typename T>
+void ManipulationStation<T>::SetupCitoRlStation(
+  IiwaCollisionModel collision_model) {
+
+  DRAKE_DEMAND(setup_ == Setup::kNone);
+  setup_ = Setup::kCitoRl;
+
+  // Add the table and 80/20 workcell frame.
+  {
+    const double dx_table_center_to_robot_base = 1.2;
+    const double dz_table_top_robot_base = 0.15;
+    const std::string sdf_path = FindResourceOrThrow(
+        "drake/examples/manipulation_station/models/"
+        "table.sdf");
+
+    RigidTransform<double> X_WT(
+        Vector3d(dx_table_center_to_robot_base, 0, dz_table_top_robot_base));
+    internal::AddAndWeldModelFrom(sdf_path, "table", plant_->world_frame(),
+                                  "table", X_WT, plant_);
+  }
+
+  AddDefaultIiwa(collision_model);
+  //AddDefaultWsg(schunk_model);
+
 }
 
 template <typename T>
@@ -396,8 +477,10 @@ void ManipulationStation<T>::SetDefaultState(
   // the IIWA state.
   SetIiwaPosition(station_context, state, GetIiwaPosition(station_context));
   SetIiwaVelocity(station_context, state, VectorX<T>::Zero(num_iiwa_joints()));
-  SetWsgPosition(station_context, state, q0_gripper);
-  SetWsgVelocity(station_context, state, 0);
+  if (setup_ != Setup::kCitoRl){
+    SetWsgPosition(station_context, state, q0_gripper);
+    SetWsgVelocity(station_context, state, 0);
+  }
 }
 
 template <typename T>
@@ -431,8 +514,10 @@ void ManipulationStation<T>::SetRandomState(
   // the IIWA state.
   SetIiwaPosition(station_context, state, GetIiwaPosition(station_context));
   SetIiwaVelocity(station_context, state, VectorX<T>::Zero(num_iiwa_joints()));
-  SetWsgPosition(station_context, state, GetWsgPosition(station_context));
-  SetWsgVelocity(station_context, state, 0);
+  if (setup_ != Setup::kCitoRl){
+    SetWsgPosition(station_context, state, GetWsgPosition(station_context));
+    SetWsgVelocity(station_context, state, 0);
+  }
 }
 
 template <typename T>
@@ -453,18 +538,21 @@ void ManipulationStation<T>::MakeIiwaControllerModel() {
   // (according to the sdf)... and we don't believe our inertia calibration
   // on the hardware to be so precise, so we simply ignore the inertia
   // contribution from the fingers here.
-  const multibody::RigidBody<T>& wsg_equivalent =
-      owned_controller_plant_->AddRigidBody(
-          "wsg_equivalent", controller_iiwa_model,
-          internal::MakeCompositeGripperInertia(
-              wsg_model_.model_path, wsg_model_.child_frame->name()));
+  if (setup_ != Setup::kCitoRl){
+    std::cout << "here2" <<std::endl;
+    const multibody::RigidBody<T>& wsg_equivalent =
+        owned_controller_plant_->AddRigidBody(
+            "wsg_equivalent", controller_iiwa_model,
+            internal::MakeCompositeGripperInertia(
+                wsg_model_.model_path, wsg_model_.child_frame->name()));
 
-  // TODO(siyuan.feng@tri.global): when we handle multiple IIWA and WSG, this
-  // part need to deal with the parent's (iiwa's) model instance id.
-  owned_controller_plant_->WeldFrames(
-      owned_controller_plant_->GetFrameByName(wsg_model_.parent_frame->name(),
-                                              controller_iiwa_model),
-      wsg_equivalent.body_frame(), wsg_model_.X_PC);
+    // TODO(siyuan.feng@tri.global): when we handle multiple IIWA and WSG, this
+    // part need to deal with the parent's (iiwa's) model instance id.
+    owned_controller_plant_->WeldFrames(
+        owned_controller_plant_->GetFrameByName(wsg_model_.parent_frame->name(),
+                                                controller_iiwa_model),
+        wsg_equivalent.body_frame(), wsg_model_.X_PC);
+  }
   owned_controller_plant_->set_name("controller_plant");
 }
 
@@ -478,9 +566,13 @@ void ManipulationStation<T>::Finalize(
     std::map<std::string, std::unique_ptr<geometry::render::RenderEngine>>
         render_engines) {
   DRAKE_THROW_UNLESS(iiwa_model_.model_instance.is_valid());
-  DRAKE_THROW_UNLESS(wsg_model_.model_instance.is_valid());
-
+  if (setup_ != Setup::kCitoRl){
+    std::cout << "here000" <<std::endl;
+    DRAKE_THROW_UNLESS(wsg_model_.model_instance.is_valid());
+  }
+  std::cout << "here00" <<std::endl;
   MakeIiwaControllerModel();
+  std::cout << "here0" <<std::endl;
 
   // Note: This deferred diagram construction method/workflow exists because we
   //   - cannot finalize plant until all of my objects are added, and
@@ -492,6 +584,21 @@ void ManipulationStation<T>::Finalize(
 
   switch (setup_) {
     case Setup::kNone:
+    case Setup::kCitoRl: {
+      // Set the initial positions of the IIWA to a comfortable configuration
+      // inside the workspace of the station.
+      q0_iiwa << 0, 0.6, 0, -1.75, 0, 1.0, 0;
+
+      std::uniform_real_distribution<symbolic::Expression> x(0.4, 0.65),
+          y(-0.35, 0.35), z(0, 0.05);
+      const Vector3<symbolic::Expression> xyz{x(), y(), z()};
+      for (const auto& body_index : object_ids_) {
+        const multibody::Body<T>& body = plant_->get_body(body_index);
+        plant_->SetFreeBodyRandomPositionDistribution(body, xyz);
+        plant_->SetFreeBodyRandomRotationDistributionToUniform(body);
+      }
+      break;
+    }
     case Setup::kManipulationClass: {
       // Set the initial positions of the IIWA to a comfortable configuration
       // inside the workspace of the station.
@@ -537,7 +644,7 @@ void ManipulationStation<T>::Finalize(
       break;
     }
   }
-
+  std::cout << "here" <<std::endl;
   // Set the iiwa default configuration.
   const auto iiwa_joint_indices =
       plant_->GetJointIndices(iiwa_model_.model_instance);
@@ -658,33 +765,44 @@ void ManipulationStation<T>::Finalize(
     builder.ExportOutput(adder->get_output_port(), "iiwa_torque_measured");
   }
 
-  {
-    auto wsg_controller = builder.template AddSystem<
-        manipulation::schunk_wsg::SchunkWsgPositionController>(
-        manipulation::schunk_wsg::kSchunkWsgLcmStatusPeriod, wsg_kp_, wsg_kd_);
-    wsg_controller->set_name("wsg_controller");
+  { 
+    if (setup_ != Setup::kCitoRl){
+      auto wsg_controller = builder.template AddSystem<
+          manipulation::schunk_wsg::SchunkWsgPositionController>(
+          manipulation::schunk_wsg::kSchunkWsgLcmStatusPeriod, wsg_kp_, wsg_kd_);
+      wsg_controller->set_name("wsg_controller");
 
-    builder.Connect(
-        wsg_controller->get_generalized_force_output_port(),
-        plant_->get_actuation_input_port(wsg_model_.model_instance));
-    builder.Connect(plant_->get_state_output_port(wsg_model_.model_instance),
-                    wsg_controller->get_state_input_port());
+      builder.Connect(
+          wsg_controller->get_generalized_force_output_port(),
+          plant_->get_actuation_input_port(wsg_model_.model_instance));
+      builder.Connect(plant_->get_state_output_port(wsg_model_.model_instance),
+                      wsg_controller->get_state_input_port());
 
-    builder.ExportInput(wsg_controller->get_desired_position_input_port(),
-                        "wsg_position");
-    builder.ExportInput(wsg_controller->get_force_limit_input_port(),
-                        "wsg_force_limit");
+      builder.ExportInput(wsg_controller->get_desired_position_input_port(),
+                          "wsg_position");
+      builder.ExportInput(wsg_controller->get_force_limit_input_port(),
+                          "wsg_force_limit");
 
-    auto wsg_mbp_state_to_wsg_state = builder.template AddSystem(
-        manipulation::schunk_wsg::MakeMultibodyStateToWsgStateSystem<double>());
-    builder.Connect(plant_->get_state_output_port(wsg_model_.model_instance),
-                    wsg_mbp_state_to_wsg_state->get_input_port());
+      auto wsg_mbp_state_to_wsg_state = builder.template AddSystem(
+          manipulation::schunk_wsg::MakeMultibodyStateToWsgStateSystem<double>());
+      builder.Connect(plant_->get_state_output_port(wsg_model_.model_instance),
+                      wsg_mbp_state_to_wsg_state->get_input_port());
 
-    builder.ExportOutput(wsg_mbp_state_to_wsg_state->get_output_port(),
-                         "wsg_state_measured");
+      builder.ExportOutput(wsg_mbp_state_to_wsg_state->get_output_port(),
+                          "wsg_state_measured");
 
-    builder.ExportOutput(wsg_controller->get_grip_force_output_port(),
-                         "wsg_force_measured");
+      builder.ExportOutput(wsg_controller->get_grip_force_output_port(),
+                          "wsg_force_measured");
+    } else {
+      auto manipuland_pose_extractor=
+          builder.template AddSystem<
+            internal::ManipulandPoseExtractor<double>>(plant_);
+      builder.Connect(
+          plant_->get_geometry_poses_output_port(),
+          manipuland_pose_extractor->get_input_port());
+      builder.ExportOutput(manipuland_pose_extractor->get_output_port(),
+                           "optitrack_manipuland_pose");
+    }
   }
 
   builder.ExportOutput(plant_->get_generalized_contact_forces_output_port(

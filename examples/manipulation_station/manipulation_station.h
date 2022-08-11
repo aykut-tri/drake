@@ -30,7 +30,7 @@ enum class IiwaCollisionModel { kNoCollision, kBoxCollision };
 enum class SchunkCollisionModel { kBox, kBoxPlusFingertipSpheres };
 
 /// Determines which manipulation station is simulated.
-enum class Setup { kNone, kManipulationClass, kClutterClearing, kPlanarIiwa };
+enum class Setup { kNone, kCitoRl, kManipulationClass, kClutterClearing, kPlanarIiwa};
 
 /// @defgroup manipulation_station_systems Manipulation Station
 /// @{
@@ -149,7 +149,7 @@ class ManipulationStation : public systems::Diagram<T> {
   /// @param time_step The time step used by MultibodyPlant<T>, and by the
   ///   discrete derivative used to approximate velocity from the position
   ///   command inputs.
-  explicit ManipulationStation(double time_step = 0.002);
+  explicit ManipulationStation(double time_step = 0.002,  std::string contact_model = "point",  std::string contact_solver = "tamsi");
 
   /// Adds a default iiwa, wsg, two bins, and a camera, then calls
   /// RegisterIiwaControllerModel() and RegisterWsgControllerModel() with
@@ -157,6 +157,17 @@ class ManipulationStation : public systems::Diagram<T> {
   /// @note Must be called before Finalize().
   /// @note Only one of the `Setup___()` methods should be called.
   /// @param X_WCameraBody Transformation between the world and the camera body.
+  /// @param collision_model Determines which sdf is loaded for the IIWA.
+  /// @param schunk_model Determines which sdf is loaded for the Schunk.
+  void SetupCitoRlStation(
+    IiwaCollisionModel collision_model = IiwaCollisionModel::kNoCollision);
+
+  /// Adds a default iiwa, wsg, cupboard, and 80/20 frame for the MIT
+  /// Intelligent Robot Manipulation class, then calls
+  /// RegisterIiwaControllerModel() and RegisterWsgControllerModel() with
+  /// the appropriate arguments.
+  /// @note Must be called before Finalize().
+  /// @note Only one of the `Setup___()` methods should be called.
   /// @param collision_model Determines which sdf is loaded for the IIWA.
   /// @param schunk_model Determines which sdf is loaded for the Schunk.
   void SetupClutterClearingStation(
@@ -295,7 +306,8 @@ class ManipulationStation : public systems::Diagram<T> {
   /// @param model_file The path to the .sdf model file of the object.
   /// @param X_WObject The pose of the object in world frame.
   void AddManipulandFromFile(const std::string& model_file,
-                             const math::RigidTransform<double>& X_WObject);
+                             const math::RigidTransform<double>& X_WObject,
+                             const std::string manipuland_name={});
 
   // TODO(russt): Add scalar copy constructor etc once we support more
   // scalar types than T=double.  See #9573.

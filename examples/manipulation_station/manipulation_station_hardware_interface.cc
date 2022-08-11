@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <utility>
+#include <limits>
 
 #include "drake/common/find_resource.h"
 #include "drake/lcm/drake_lcm.h"
@@ -20,19 +21,52 @@
 #include "drake/systems/lcm/lcm_subscriber_system.h"
 #include "drake/systems/primitives/pass_through.h"
 #include "drake/systems/sensors/lcm_image_array_to_images.h"
+#include "drake/systems/sensors/optitrack_receiver.h"
+#include "drake/systems/sensors/optitrack_sender.h"
+
 
 namespace drake {
 namespace examples {
 namespace manipulation_station {
 
 using Eigen::Vector3d;
+using Eigen::Matrix3d;
 using multibody::MultibodyPlant;
 using multibody::Parser;
+using systems::Context;
+
+template <typename T>
+
+class ApplyTransformToPose final : public systems::LeafSystem<T> {
+ public:
+  explicit ApplyTransformToPose(){
+    input_ = &this->DeclareAbstractInputPort(
+        "input_pose", Value<math::RigidTransformd>());
+    this->DeclareAbstractOutputPort(
+        "output_pose", &ApplyTransformToPose<T>::Applicator);
+    A_ << 1,0,0,0,1,0,0,0,1;
+  }
+  void Applicator(const Context<T>& context,
+                 math::RigidTransform<T>* output) const {
+    const math::RigidTransform<T>& pose =
+        input_->Eval<math::RigidTransform<T>>(context);
+    
+    *output = pose;
+    
+    output->set_rotation(pose.rotation());
+    output->set_translation(A_ * pose.translation());
+  }
+
+ private:
+  Matrix3d A_;
+  const systems::InputPort<double>* input_{};
+ 
+};
 
 // TODO(russt): Consider taking DrakeLcmInterface as an argument instead of
 // (only) constructing one internally.
 ManipulationStationHardwareInterface::ManipulationStationHardwareInterface(
-    std::vector<std::string> camera_names)
+    std::vector<std::string> camera_names, bool has_wsg, bool has_optitrack)
     : owned_controller_plant_(std::make_unique<MultibodyPlant<double>>(0.0)),
       owned_lcm_(new lcm::DrakeLcm()),
       camera_names_(std::move(camera_names)) {
@@ -79,33 +113,35 @@ ManipulationStationHardwareInterface::ManipulationStationHardwareInterface(
                        "iiwa_torque_external");
   builder.Connect(iiwa_status_subscriber_->get_output_port(),
                   iiwa_status_receiver->get_input_port());
+  
+  if (has_wsg==true){
+    // Publish WSG command.
+    auto wsg_command_sender =
+        builder.AddSystem<manipulation::schunk_wsg::SchunkWsgCommandSender>();
+    auto wsg_command_publisher = builder.AddSystem(
+        systems::lcm::LcmPublisherSystem::Make<drake::lcmt_schunk_wsg_command>(
+            "SCHUNK_WSG_COMMAND", lcm, 0.05
+            /* publish period: Schunk driver won't respond faster than 20Hz */));
+    builder.ExportInput(wsg_command_sender->get_position_input_port(),
+                        "wsg_position");
+    builder.ExportInput(wsg_command_sender->get_force_limit_input_port(),
+                        "wsg_force_limit");
+    builder.Connect(wsg_command_sender->get_output_port(0),
+                    wsg_command_publisher->get_input_port());
 
-  // Publish WSG command.
-  auto wsg_command_sender =
-      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgCommandSender>();
-  auto wsg_command_publisher = builder.AddSystem(
-      systems::lcm::LcmPublisherSystem::Make<drake::lcmt_schunk_wsg_command>(
-          "SCHUNK_WSG_COMMAND", lcm, 0.05
-          /* publish period: Schunk driver won't respond faster than 20Hz */));
-  builder.ExportInput(wsg_command_sender->get_position_input_port(),
-                      "wsg_position");
-  builder.ExportInput(wsg_command_sender->get_force_limit_input_port(),
-                      "wsg_force_limit");
-  builder.Connect(wsg_command_sender->get_output_port(0),
-                  wsg_command_publisher->get_input_port());
-
-  // Receive WSG status and populate the output ports.
-  auto wsg_status_receiver =
-      builder.AddSystem<manipulation::schunk_wsg::SchunkWsgStatusReceiver>();
-  wsg_status_subscriber_ = builder.AddSystem(
-      systems::lcm::LcmSubscriberSystem::Make<drake::lcmt_schunk_wsg_status>(
-          "SCHUNK_WSG_STATUS", lcm));
-  builder.ExportOutput(wsg_status_receiver->get_state_output_port(),
-                       "wsg_state_measured");
-  builder.ExportOutput(wsg_status_receiver->get_force_output_port(),
-                       "wsg_force_measured");
-  builder.Connect(wsg_status_subscriber_->get_output_port(),
-                  wsg_status_receiver->get_input_port(0));
+    // Receive WSG status and populate the output ports.
+    auto wsg_status_receiver =
+        builder.AddSystem<manipulation::schunk_wsg::SchunkWsgStatusReceiver>();
+    wsg_status_subscriber_ = builder.AddSystem(
+        systems::lcm::LcmSubscriberSystem::Make<drake::lcmt_schunk_wsg_status>(
+            "SCHUNK_WSG_STATUS", lcm));
+    builder.ExportOutput(wsg_status_receiver->get_state_output_port(),
+                        "wsg_state_measured");
+    builder.ExportOutput(wsg_status_receiver->get_force_output_port(),
+                        "wsg_force_measured");
+    builder.Connect(wsg_status_subscriber_->get_output_port(),
+                    wsg_status_receiver->get_input_port(0));
+  }
 
   for (const std::string& name : camera_names_) {
     auto camera_subscriber = builder.AddSystem(
@@ -124,6 +160,33 @@ ManipulationStationHardwareInterface::ManipulationStationHardwareInterface(
     camera_subscribers_.push_back(camera_subscriber);
   }
 
+  if (has_optitrack==true){
+    //subscribe to box pose through LCM
+    optitrack_subscriber =
+        builder.AddSystem(
+            systems::lcm::LcmSubscriberSystem::Make<optitrack::optitrack_frame_t>(
+                "OPTITRACK_FRAMES", lcm ));
+    int optitrack_id = 0;            
+    std::map<int,std::string> frame_map{{optitrack_id, "body_1"}};;
+
+    auto optitrack_decoder =
+        builder.AddSystem<systems::sensors::OptitrackReceiver>(frame_map);
+
+    builder.Connect(optitrack_subscriber->get_output_port(),
+                    optitrack_decoder->get_input_port());
+
+    // apply pose transform
+    auto pose_transform=builder.AddSystem<ApplyTransformToPose<double>>();
+    builder.Connect(optitrack_decoder->GetOutputPort("body_1"),
+          pose_transform->get_input_port());
+    builder.ExportOutput(
+        pose_transform->get_output_port(),
+        "optitrack_manipuland_pose");
+
+    // builder.ExportOutput(
+    //     optitrack_decoder->GetOutputPort("body_1"),
+    //     "optitrack_manipuland_pose");
+  }
   builder.BuildInto(this);
   this->set_name("manipulation_station_hardware_interface");
 
@@ -142,7 +205,7 @@ ManipulationStationHardwareInterface::ManipulationStationHardwareInterface(
   owned_controller_plant_->Finalize();
 }
 
-void ManipulationStationHardwareInterface::Connect(bool wait_for_cameras) {
+void ManipulationStationHardwareInterface::Connect(bool wait_for_cameras,bool wait_for_wsg, bool wait_for_optitrack) {
   drake::lcm::DrakeLcmInterface* const lcm = owned_lcm_.get();
   auto wait_for_new_message = [lcm](const auto& lcm_sub) {
     std::cout << "Waiting for " << lcm_sub.get_channel_name()
@@ -155,7 +218,12 @@ void ManipulationStationHardwareInterface::Connect(bool wait_for_cameras) {
   };
 
   wait_for_new_message(*iiwa_status_subscriber_);
-  wait_for_new_message(*wsg_status_subscriber_);
+  if (wait_for_wsg==true){
+    wait_for_new_message(*wsg_status_subscriber_);
+  }
+  if (wait_for_optitrack==true){
+    wait_for_new_message(*optitrack_subscriber);
+  }
   if (wait_for_cameras) {
     for (const auto* sub : camera_subscribers_) {
       wait_for_new_message(*sub);
