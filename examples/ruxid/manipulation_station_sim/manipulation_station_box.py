@@ -1,8 +1,7 @@
 """
-This is an example for simulating a simplified humanoid (aka. noodleman) through pydrake.
-It reads three simple SDFormat files of a hydroelastic humanoid,
-a rigid chair, and rigid floor.
-It uses an inverse dynamics controller to bring the noodleman from a sitting to standing up position.
+This is an example for following the horizontal position of a box detected
+by an optitrack setup with a Kuka iiwa arm both in simulation and on
+hardware.
 """
 import argparse
 import matplotlib.pyplot as plt
@@ -10,7 +9,7 @@ import numpy as np
 from utils import (FindResource, MakeNamedViewPositions, MakeNamedViewState,
                    MakeNamedViewActuation, AddShape)
 
-from pydrake.examples.manipulation_station.differential_ik import DifferentialIK
+from drake.examples.manipulation_station.differential_ik import DifferentialIK
 from pydrake.math import (RigidTransform, RollPitchYaw, RotationMatrix)
 from pydrake.multibody.parsing import Parser
 from pydrake.systems.analysis import (
@@ -27,13 +26,8 @@ from pydrake.examples.manipulation_station import (
     ManipulationStation, ManipulationStationHardwareInterface)
 
 
-# Env parameters
+# Environment parameters
 sim_time_step = 0.025
-# gym_time_step=0.1
-controller_time_step = 0.01
-# gym_time_limit=5
-modes = ["IDC", "torque"]
-control_mode = modes[0]
 table_heigth = 0.15
 box_size = [0.2,  # 0.2+0.1*(np.random.random()-0.5),
             0.2,  # 0.2+0.1*(np.random.random()-0.5),
@@ -41,12 +35,12 @@ box_size = [0.2,  # 0.2+0.1*(np.random.random()-0.5),
             ]
 box_mass = 1
 box_mu = 1.0
-# 'hydroelastic_with_fallback'#ContactModel.kHydroelasticWithFallback#kPoint
 contact_model = 'point'
-contact_solver = 'sap'  # ContactSolver.kSap#kTamsi # kTamsi
-desired_box_xy = [
-    1, +0.5*(np.random.random()-0.5),
-    0.+0.8*(np.random.random()-0.5),
+contact_solver = 'sap'
+desired_box_pos = [
+    1.0,
+    0.5*(np.random.random()-0.5),
+    0.8*(np.random.random()-0.5),
 ]
 
 
@@ -133,7 +127,7 @@ def make_environment(meshcat=None, debug=False, hardware=False, args=None):
 
     builder = DiagramBuilder()
 
-    target_position = [desired_box_xy[0], desired_box_xy[1], table_heigth]
+    target_position = [desired_box_pos[0], desired_box_pos[1], table_heigth]
 
     if hardware:
         camera_ids = []
@@ -143,7 +137,6 @@ def make_environment(meshcat=None, debug=False, hardware=False, args=None):
                         wait_for_wsg=False, wait_for_optitrack=False)
         controller_plant = station.get_controller_plant()
         plant = None
-        # plant=station.get_multibody_plant()
     else:
         station = builder.AddSystem(ManipulationStation(
             time_step=sim_time_step, contact_model=contact_model, contact_solver=contact_solver))
@@ -158,7 +151,6 @@ def make_environment(meshcat=None, debug=False, hardware=False, args=None):
         controller_plant = station.get_controller_plant()
         plant = station.get_multibody_plant()
 
-        #box = AddBox(plant)
         AddTargetPosVisuals(plant, target_position)
         station.Finalize()
 
@@ -199,12 +191,6 @@ def make_environment(meshcat=None, debug=False, hardware=False, args=None):
         print("\nPosition view: ", PositionView(np.ones(Np)))
         # pdb.set_trace()
 
-    # builder.ExportInput(station.GetInputPort("iiwa_position"),"iiwa_position_commanded")
-
-    # zeros_v = builder.AddSystem(ConstantVectorSource([0]*Na))
-    # builder.Connect(zeros_v.get_output_port(),
-    #             iiwa_position.get_input_port())
-
     class optitrack_debug_system(LeafSystem):
 
         def __init__(self):
@@ -241,7 +227,6 @@ def make_environment(meshcat=None, debug=False, hardware=False, args=None):
         iiwa14_velocity_limits = np.array([1.4, 1.4, 1.7, 1.3, 2.2, 2.3, 2.3])
 
         # Stay within a small fraction of those limits for this teleop demo.
-
         factor = 0.8
         params.set_joint_velocity_limits((-factor*iiwa14_velocity_limits,
                                           factor*iiwa14_velocity_limits))
@@ -359,9 +344,6 @@ def simulate_diagram(diagram, plant, controller_plant, station,
 
     context = simulator.get_mutable_context()
     context.SetTime(0)
-    # num_iiwa_joints = station.num_iiwa_joints()
-    # station.GetInputPort("iiwa_feedforward_torque").FixValue(
-    #     station_context, np.zeros(num_iiwa_joints))
 
     time_tracker = 0
     if hardware:
