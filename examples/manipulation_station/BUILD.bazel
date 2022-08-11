@@ -264,6 +264,15 @@ drake_py_binary(
     ],
 )
 
+drake_py_binary(
+    name = "cito_execution",
+    srcs = ["cito_execution.py"],
+    deps = [
+        "//bindings/pydrake",
+        ":differential_ik",
+    ],
+)
+
 install_data()
 
 add_lint_tests()
