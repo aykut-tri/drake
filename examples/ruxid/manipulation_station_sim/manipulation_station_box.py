@@ -28,10 +28,11 @@ from pydrake.examples.manipulation_station import (
 
 # Environment parameters
 sim_time_step = 0.025
-table_heigth = 0.15
-box_size = [0.2,  # 0.2+0.1*(np.random.random()-0.5),
-            0.2,  # 0.2+0.1*(np.random.random()-0.5),
-            0.2,  # 0.2+0.1*(np.random.random()-0.5),
+table_heigth = 0.0
+target_offset_z = 0.1
+box_size = [0.13,  # 0.2+0.1*(np.random.random()-0.5),
+            0.13,  # 0.2+0.1*(np.random.random()-0.5),
+            0.07,  # 0.2+0.1*(np.random.random()-0.5),
             ]
 box_mass = 1
 box_mu = 1.0
@@ -53,17 +54,6 @@ def AddFloor(plant):
                        np.array([0, 0, 0.0]))
     )
     return floor
-
-
-def AddTable(plant):
-    parser = Parser(plant)
-    table = parser.AddModelFromFile(FindResource("models/table.sdf"))
-    plant.WeldFrames(
-        plant.world_frame(), plant.GetFrameByName("table", table),
-        RigidTransform(RollPitchYaw(0, 0, 0),
-                       np.array([0, 1.2, table_heigth]))
-    )
-    return table
 
 
 def AddBox(plant):
@@ -204,9 +194,7 @@ def make_environment(meshcat=None, debug=False, hardware=False, args=None):
             # pdb.set_trace()
             try:
                 signal_input = self.get_input_port(0).Eval(context)
-                print("input: ", signal_input.translation())
-                print("input: ", signal_input.translation()[
-                      1], -signal_input.translation()[0], signal_input.translation()[2])
+                print("box_pose: ", signal_input.translation())
             except:
                 pass
 
@@ -376,9 +364,13 @@ def simulate_diagram(diagram, plant, controller_plant, station,
     if box_following:
         box_pose = station.GetOutputPort("optitrack_manipuland_pose").Eval(
             station_context)
+        
         # rpy_xyz_goal=np.array([0,0,0,box_pose.translation()[1],-box_pose.translation()[0],box_pose.translation()[2]+0.15])
-        rpy_xyz_goal = np.array([0, 0, 0, box_pose.translation(
-        )[0], box_pose.translation()[1], box_pose.translation()[2]+0.25])
+        box_x = min(max(0.2, box_pose.translation()[0]), 1.0)
+        box_y = min(max(-0.5, box_pose.translation()[1]), 0.5)
+        box_z = min(max(0.2, box_pose.translation()[2]-(box_size[2]/2)+target_offset_z), 1.0)
+
+        rpy_xyz_goal = np.array([0, 0, 0, box_x, box_y, box_z])
         # pdb.set_trace()
         diagram.GetInputPort("iiwa_position_commanded_EE").FixValue(
             diagram_context, np.array(rpy_xyz_goal))
@@ -390,7 +382,9 @@ def simulate_diagram(diagram, plant, controller_plant, station,
 
     adv_step = 0.3
     for i in range(int(simulation_time/adv_step)):
-        input("Press Enter to continue...")
+        if args.debug:
+            pass
+            #input("Press Enter to continue...")
         time_tracker += adv_step
         simulator.AdvanceTo(time_tracker)
         # PrintSimulatorStatistics(simulator)
