@@ -44,7 +44,7 @@ class ApplyTransformToPose final : public systems::LeafSystem<T> {
         "input_pose", Value<math::RigidTransformd>());
     this->DeclareAbstractOutputPort(
         "output_pose", &ApplyTransformToPose<T>::Applicator);
-    A_ << 1,0,0,0,1,0,0,0,1;
+    A_ << -1,0,0,0,-1,0,0,0,1;
   }
   void Applicator(const Context<T>& context,
                  math::RigidTransform<T>* output) const {
@@ -166,7 +166,7 @@ ManipulationStationHardwareInterface::ManipulationStationHardwareInterface(
         builder.AddSystem(
             systems::lcm::LcmSubscriberSystem::Make<optitrack::optitrack_frame_t>(
                 "OPTITRACK_FRAMES", lcm ));
-    int optitrack_id = 0;            
+    int optitrack_id = 1;
     std::map<int,std::string> frame_map{{optitrack_id, "body_1"}};;
 
     auto optitrack_decoder =
