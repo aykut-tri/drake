@@ -76,6 +76,8 @@ drake_cc_library(
         "//systems/lcm",
         "//systems/primitives",
         "//systems/sensors:lcm_image_array_to_images",
+        "//systems/sensors:optitrack_receiver",
+        "//systems/sensors:optitrack_sender",
     ],
 )
 
@@ -101,6 +103,7 @@ drake_cc_binary(
         "//systems/analysis:simulator",
         "//systems/lcm",
         "//systems/sensors:image_to_lcm_image_array_t",
+        "//systems/sensors:optitrack_sender",
         "@gflags",
     ],
 )
@@ -249,6 +252,15 @@ drake_py_binary(
     add_test_rule = 1,
     deps = [
         "//bindings/pydrake",
+    ],
+)
+
+drake_py_binary(
+    name = "box_tracking",
+    srcs = ["box_tracking.py"],
+    deps = [
+        "//bindings/pydrake",
+        ":differential_ik",
     ],
 )
 
