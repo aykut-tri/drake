@@ -15,41 +15,27 @@ from utils import FindResource
 
 
 class TrajectoryPlanner():
-    def __init__(self, initial_pose, desired_box_x):
+    def __init__(self, initial_pose, desired_box_x, preview=False):
         self.q0 = initial_pose
         self.xd = desired_box_x
+        self.preview = preview
         # Create the environment
         builder = DiagramBuilder()
         self.plant, self.scene = AddMultibodyPlantSceneGraph(builder, 5e-2)
-        self.build_environment(arm_only=True)
+        self.build_environment(add_manipuland=False)
         # Add a meshcat visualizer
         MeshcatVisualizer.AddToBuilder(builder=builder, scene_graph=self.scene,
                                        meshcat=StartMeshcat())
         # Build the diagram
-        diagram = builder.Build()
+        self.diagram = builder.Build()
         # Create contexts
-        diagram_context = diagram.CreateDefaultContext()
-        self.plant_context = self.plant.GetMyContextFromRoot(diagram_context)
+        self.diagram_context = self.diagram.CreateDefaultContext()
+        self.plant_context = self.plant.GetMyContextFromRoot(self.diagram_context)
 
-        # Publish the initial pose
-        diagram_context.SetDiscreteState(
+        # Visualize the initial pose
+        self.diagram_context.SetDiscreteState(
             np.hstack((self.q0[:7], np.zeros(self.plant.num_velocities()))))
-        diagram.Publish(diagram_context)
-
-        # Plan a trajectory to a desired joint pose
-        time, states = self.plan_to_joint_pose(
-            q_goal=np.array([0, 0, 0, -np.pi/2, 0, np.pi/2, 0]), num_time_samples=21)
-
-        # Preview the planned trajectory
-        input("\nReady to preview the planned trajectory?\n")
-        for i, t in enumerate(time):
-            print(f"t = {t}")
-            print(f"\tq = {states[:7, i]}")
-            print(f"\tv = {states[7:, i]}")
-            diagram_context.SetDiscreteState(states[:, i])
-            diagram.Publish(diagram_context)
-            input("Press Enter to continue...")
-        print("The preview is completed")
+        self.diagram.Publish(self.diagram_context)
 
         # # Create ports and objects for collision computations
         # self.query_port = self.plant.get_geometry_query_input_port()
@@ -71,6 +57,30 @@ class TrajectoryPlanner():
         # diagram_context_ad = diagram_ad.CreateDefaultContext()
         # self.plant_ad = diagram_ad.GetSubsystemByName(self.plant.get_name())
         # self.plant_context_ad = self.plant_ad.GetMyContextFromRoot(diagram_context_ad)
+
+    def plan(self):
+        # Plan a trajectory to the desired joint pose
+        time, states = self.plan_to_joint_pose(
+            q_goal=np.array([0, 0, 0, -np.pi/2, 0, np.pi/2, 0]), num_time_samples=21)
+
+        # Preview the planned trajectory
+        if self.preview:
+            input("\nReady to preview the planned trajectory?\n")
+            for i, t in enumerate(time):
+                print(f"t = {t}")
+                print(f"\tq = {states[:7, i]}")
+                print(f"\tv = {states[7:, i]}")
+                self.diagram_context.SetDiscreteState(states[:, i])
+                self.diagram.Publish(self.diagram_context)
+                input("Press Enter to continue...")
+            print("The preview is completed")
+
+        # Smoothen and return the position trajectory
+        plan = PiecewisePolynomial.CubicWithContinuousSecondDerivatives(
+            time, states[:7, :], np.zeros(7), np.zeros(7))
+        # t_int = np.linspace(0, time[-1], 100)
+        # x_int = plan.vector_values(t_int)
+        return plan
 
     def plan_to_joint_pose(self, q_goal, num_time_samples=11):
         # Build a continuous-time plant and a scene
@@ -147,20 +157,20 @@ class TrajectoryPlanner():
         return (t, x)
 
 
-    def build_environment(self, arm_only=False):
+    def build_environment(self, add_manipuland=False):
+        # Add a table (i.e., a box) and fix it to the world
+        Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/floor.sdf"))
+        self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
+                            frame_on_child_M=self.plant.GetFrameByName("floor"),
+                            X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
         # Add an iiwa and fix its base to the world
         Parser(self.plant, self.scene).AddModelFromFile(
             FindResource("models/iiwa14_point_end_effector.sdf"))
         self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
                               frame_on_child_M=self.plant.GetFrameByName("iiwa_link_0"),
                               X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
-        if not arm_only:
-            # Add a table (i.e., a box) and fix it to the world
-            Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/floor.sdf"))
-            self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
-                                frame_on_child_M=self.plant.GetFrameByName("floor"),
-                                X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
-            # Add the manipuland
+        # Add the manipuland
+        if add_manipuland:
             Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/custom_box.sdf"))
         # Finalize the plant
         self.plant.Finalize()
