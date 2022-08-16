@@ -167,6 +167,15 @@ drake_py_library(
 )
 
 drake_py_library(
+    name = "trajectory_planner",
+    srcs = ["trajectory_planner.py"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
+drake_py_library(
     name = "schunk_wsg_buttons",
     srcs = ["schunk_wsg_buttons.py"],
     visibility = ["//visibility:private"],
@@ -270,6 +279,7 @@ drake_py_binary(
     deps = [
         "//bindings/pydrake",
         ":differential_ik",
+        ":trajectory_planner",
     ],
 )
 
