@@ -1,10 +1,16 @@
 import numpy as np
+import time
 
-from pydrake.geometry import (MeshcatVisualizer, StartMeshcat)
+from pydrake.common import FindResourceOrThrow
+from pydrake.geometry import (MeshcatVisualizer, SceneGraph, StartMeshcat)
 from pydrake.math import RigidTransform
 from pydrake.multibody.parsing import Parser
-from pydrake.multibody.plant import AddMultibodyPlantSceneGraph
+from pydrake.multibody.plant import (AddMultibodyPlantSceneGraph, MultibodyPlant)
+from pydrake.solvers import (BoundingBoxConstraint, IpoptSolver, SnoptSolver)
 from pydrake.systems.framework import DiagramBuilder
+from pydrake.systems.trajectory_optimization import DirectCollocation
+from pydrake.trajectories import PiecewisePolynomial
+
 from utils import FindResource
 
 
@@ -15,11 +21,11 @@ class TrajectoryPlanner():
         # Create the environment
         builder = DiagramBuilder()
         self.plant, self.scene = AddMultibodyPlantSceneGraph(builder, 5e-2)
-        self.build_environment()
-        # Add visualizer
+        self.build_environment(arm_only=True)
+        # Add a meshcat visualizer
         MeshcatVisualizer.AddToBuilder(builder=builder, scene_graph=self.scene,
                                        meshcat=StartMeshcat())
-        # Build
+        # Build the diagram
         diagram = builder.Build()
         # Create contexts
         diagram_context = diagram.CreateDefaultContext()
@@ -27,45 +33,135 @@ class TrajectoryPlanner():
 
         # Publish the initial pose
         diagram_context.SetDiscreteState(
-            np.hstack((self.q0, np.zeros(self.plant.num_velocities()))))
+            np.hstack((self.q0[:7], np.zeros(self.plant.num_velocities()))))
         diagram.Publish(diagram_context)
 
-        # Create ports and objects for collision computations
-        self.query_port = self.plant.get_geometry_query_input_port()
-        self.query_object = self.query_port.Eval(self.plant_context)
-        self.inspector = self.query_object.inspector()
+        # Plan a trajectory to a desired joint pose
+        time, states = self.plan_to_joint_pose(
+            q_goal=np.array([0, 0, 0, -np.pi/2, 0, np.pi/2, 0]), num_time_samples=21)
 
-        # Specify the indices of the desired contact pairs
-        contact_candidate_ids = [0, 3, 5, 7, 9]
-        # Get the contact candidates
-        self.contact_candidates = []
-        self.X_AGa = []
-        self.X_BGb = []
-        self.pair_id_iiwa_box = None
-        self.get_contact_candidates(contact_candidate_ids=contact_candidate_ids,
-                                    print_all=False)
+        # Preview the planned trajectory
+        input("\nReady to preview the planned trajectory?\n")
+        for i, t in enumerate(time):
+            print(f"t = {t}")
+            print(f"\tq = {states[:7, i]}")
+            print(f"\tv = {states[7:, i]}")
+            diagram_context.SetDiscreteState(states[:, i])
+            diagram.Publish(diagram_context)
+            input("Press Enter to continue...")
+        print("The preview is completed")
 
-        # Create AutoDiffXd correspondences
-        diagram_ad = diagram.ToAutoDiffXd()
-        diagram_context_ad = diagram_ad.CreateDefaultContext()
-        self.plant_ad = diagram_ad.GetSubsystemByName(self.plant.get_name())
-        self.plant_context_ad = self.plant_ad.GetMyContextFromRoot(diagram_context_ad)
+        # # Create ports and objects for collision computations
+        # self.query_port = self.plant.get_geometry_query_input_port()
+        # self.query_object = self.query_port.Eval(self.plant_context)
+        # self.inspector = self.query_object.inspector()
+
+        # # Specify the indices of the desired contact pairs
+        # contact_candidate_ids = [0, 3, 5, 7, 9]
+        # # Get the contact candidates
+        # self.contact_candidates = []
+        # self.X_AGa = []
+        # self.X_BGb = []
+        # self.pair_id_iiwa_box = None
+        # self.get_contact_candidates(contact_candidate_ids=contact_candidate_ids,
+        #                             print_all=False)
+
+        # # Create AutoDiffXd correspondences
+        # diagram_ad = diagram.ToAutoDiffXd()
+        # diagram_context_ad = diagram_ad.CreateDefaultContext()
+        # self.plant_ad = diagram_ad.GetSubsystemByName(self.plant.get_name())
+        # self.plant_context_ad = self.plant_ad.GetMyContextFromRoot(diagram_context_ad)
+
+    def plan_to_joint_pose(self, q_goal, num_time_samples=11):
+        # Build a continuous-time plant and a scene
+        plant = MultibodyPlant(0)
+        scene_graph = SceneGraph()
+        plant.RegisterAsSourceForSceneGraph(scene_graph)
+        # Load the iiwa model
+        model_file = FindResourceOrThrow(
+            "drake/manipulation/models/iiwa_description/sdf/iiwa14_no_collision.sdf"
+        )
+        Parser(plant).AddModelFromFile(model_file)
+        # Attach the base to the world frame and complete the plant definition
+        plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("iiwa_link_0"))
+        plant.Finalize()
+        # Create a context for the plant
+        context = plant.CreateDefaultContext()
+
+        # Set up the collocation problem
+        dircol = DirectCollocation(
+            system=plant, context=context,
+            num_time_samples=num_time_samples, minimum_timestep=2e-2, maximum_timestep=1e-1,
+            input_port_index=plant.get_actuation_input_port().get_index())
+
+        # Get the associated mathematical program
+        prog = dircol.prog()
+
+        # Enforce equally-divided time segments
+        dircol.AddEqualTimeIntervalsConstraints()
+
+        # Specify the task
+        x0 = np.hstack((self.q0[:7], np.zeros(7)))
+        xf = np.hstack((q_goal, np.zeros(7)))
+        # Add the relevant constraints
+        prog.AddBoundingBoxConstraint(x0, x0, dircol.initial_state())
+        prog.AddBoundingBoxConstraint(xf, xf, dircol.final_state())
+
+        # Add joint position, velocity, and effort constraints
+        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(plant.GetPositionLowerLimits(),
+                                                                  plant.GetPositionUpperLimits()),
+                                            dircol.state()[:7])
+        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(plant.GetVelocityLowerLimits(),
+                                                                  plant.GetVelocityUpperLimits()),
+                                            dircol.state()[7:])
+        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(plant.GetEffortLowerLimits(),
+                                                                  plant.GetEffortUpperLimits()),
+                                            dircol.input())
+
+        # # Penalize the total time
+        # dircol.AddFinalCost(dircol.time())
+
+        # Penalize the effort
+        u = dircol.input()
+        dircol.AddRunningCost(u.dot(u))
+
+        # Set an initial guess by interpolating between the initial and final states
+        initial_x_trajectory = PiecewisePolynomial.FirstOrderHold(
+            [0., 2.], np.column_stack((x0, xf)))
+        dircol.SetInitialTrajectory(PiecewisePolynomial(), initial_x_trajectory)
+
+        # Solve the program
+        solver = SnoptSolver()
+        print("\nRunning trajectory optimization...\n")
+        t_start = time.time()
+        result = solver.Solve(prog)
+        # Print solver details
+        print(f"\tSolver type: {result.get_solver_id().name()}")
+        print(f"\tSolver took {time.time() - t_start} s")
+        print(f"\tSuccess: {result.is_success()}")
+        print(f"\tOptimal cost: {result.get_optimal_cost()}")
+
+        # Get the solution
+        t = dircol.GetSampleTimes(result)
+        x = dircol.GetStateSamples(result)
+        return (t, x)
 
 
-    def build_environment(self):
+    def build_environment(self, arm_only=False):
         # Add an iiwa and fix its base to the world
         Parser(self.plant, self.scene).AddModelFromFile(
             FindResource("models/iiwa14_point_end_effector.sdf"))
         self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
                               frame_on_child_M=self.plant.GetFrameByName("iiwa_link_0"),
                               X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
-        # Add a table (i.e., a box) and fix it to the world
-        Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/floor.sdf"))
-        self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
-                              frame_on_child_M=self.plant.GetFrameByName("floor"),
-                              X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
-        # Add the manipuland
-        Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/custom_box.sdf"))
+        if not arm_only:
+            # Add a table (i.e., a box) and fix it to the world
+            Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/floor.sdf"))
+            self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
+                                frame_on_child_M=self.plant.GetFrameByName("floor"),
+                                X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
+            # Add the manipuland
+            Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/custom_box.sdf"))
         # Finalize the plant
         self.plant.Finalize()
 
@@ -99,5 +195,3 @@ class TrajectoryPlanner():
             self.inspector.GetName(pair[1]) == "custom_box::push_point_collision"):
                 self.pair_id_iiwa_box = pair_id
         print(f"Pair ID for the iiwa-box contact: {self.pair_id_iiwa_box}")
-
-    def create_mathematical_program(self):
