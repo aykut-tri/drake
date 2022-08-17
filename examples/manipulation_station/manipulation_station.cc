@@ -4,15 +4,15 @@
 #include <memory>
 #include <string>
 #include <utility>
-#include <iostream>
+
 #include "drake/common/find_resource.h"
+#include "drake/geometry/kinematics_vector.h"
 #include "drake/geometry/render_vtk/factory.h"
 #include "drake/manipulation/schunk_wsg/schunk_wsg_constants.h"
 #include "drake/manipulation/schunk_wsg/schunk_wsg_position_controller.h"
 #include "drake/math/rigid_transform.h"
 #include "drake/math/rotation_matrix.h"
 #include "drake/multibody/parsing/parser.h"
-#include "drake/geometry/kinematics_vector.h"
 #include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/multibody/tree/revolute_joint.h"
 #include "drake/perception/depth_image_to_point_cloud.h"
@@ -41,13 +41,13 @@ using math::RigidTransform;
 using math::RigidTransformd;
 using math::RollPitchYaw;
 using math::RotationMatrix;
+using multibody::ContactModel;
+using multibody::DiscreteContactSolver;
 using multibody::Joint;
 using multibody::MultibodyPlant;
 using multibody::PrismaticJoint;
 using multibody::RevoluteJoint;
 using multibody::SpatialInertia;
-using multibody::ContactModel;
-using multibody::DiscreteContactSolver;
 using systems::Context;
 
 namespace internal {
@@ -56,21 +56,19 @@ template <typename T>
 
 class ManipulandPoseExtractor final : public systems::LeafSystem<T> {
  public:
-  explicit ManipulandPoseExtractor(const MultibodyPlant<T>* mbp)
-      : mbp_(mbp) {
+  explicit ManipulandPoseExtractor(const MultibodyPlant<T>* mbp) : mbp_(mbp) {
     input_ = &this->DeclareAbstractInputPort(
         "geometry_pose", Value<geometry::FramePoseVector<T>>());
-    this->DeclareAbstractOutputPort(
-        "output", &ManipulandPoseExtractor<T>::Extractor);
+    this->DeclareAbstractOutputPort("output",
+                                    &ManipulandPoseExtractor<T>::Extractor);
   }
   void Extractor(const Context<T>& context,
                  math::RigidTransform<T>* output) const {
     const geometry::FramePoseVector<T>& geometry_poses =
         input_->Eval<geometry::FramePoseVector<T>>(context);
-    geometry::FrameId frame_id =
-        mbp_->GetBodyFrameIdOrThrow(
-            mbp_->GetBodyByName("base_link",
-                               mbp_->GetModelInstanceByName("box")).index());
+    geometry::FrameId frame_id = mbp_->GetBodyFrameIdOrThrow(
+        mbp_->GetBodyByName("base_link", mbp_->GetModelInstanceByName("box"))
+            .index());
     *output = geometry_poses.value(frame_id);
   }
 
@@ -78,9 +76,7 @@ class ManipulandPoseExtractor final : public systems::LeafSystem<T> {
   const MultibodyPlant<T>* mbp_;
   // TODO(sammy-tri) Why in the heck can't I declare this as an InputPort<T>??
   const systems::InputPort<double>* input_{};
- 
 };
-
 
 // TODO(amcastro-tri): Refactor this into schunk_wsg directory, and cover it
 // with a unit test.  Potentially tighten the tolerance in
@@ -204,8 +200,8 @@ MakeD415CameraModel(const std::string& renderer_name) {
   const int kWidth = 848;
 
   // From color camera.
-  const systems::sensors::CameraInfo intrinsics{
-      kWidth, kHeight, 616.285, 615.778, 405.418, 232.864};
+  const systems::sensors::CameraInfo intrinsics{kWidth,  kHeight, 616.285,
+                                                615.778, 405.418, 232.864};
 
   const RigidTransformd X_BC;
   // This is not necessarily true, but we simplify this s.t. we don't have a
@@ -213,16 +209,10 @@ MakeD415CameraModel(const std::string& renderer_name) {
   const RigidTransformd X_BD;
 
   geometry::render::ColorRenderCamera color_camera{
-      {renderer_name,
-       intrinsics,
-       {0.01, 3.0} /* clipping_range */,
-       X_BC},
+      {renderer_name, intrinsics, {0.01, 3.0} /* clipping_range */, X_BC},
       false};
   geometry::render::DepthRenderCamera depth_camera{
-      {renderer_name,
-       intrinsics,
-       {0.01, 3.0} /* clipping_range */,
-       X_BD},
+      {renderer_name, intrinsics, {0.01, 3.0} /* clipping_range */, X_BD},
       {0.1, 2.0} /* depth_range */};
   return {color_camera, depth_camera};
 }
@@ -230,7 +220,9 @@ MakeD415CameraModel(const std::string& renderer_name) {
 }  // namespace internal
 
 template <typename T>
-ManipulationStation<T>::ManipulationStation(double time_step, std::string contact_model, std::string contact_solver)
+ManipulationStation<T>::ManipulationStation(double time_step,
+                                            std::string contact_model,
+                                            std::string contact_solver)
     : owned_plant_(std::make_unique<MultibodyPlant<T>>(time_step)),
       owned_scene_graph_(std::make_unique<SceneGraph<T>>()),
       // Given the controller does not compute accelerations, it is irrelevant
@@ -247,7 +239,7 @@ ManipulationStation<T>::ManipulationStation(double time_step, std::string contac
   plant_->set_name("plant");
 
   // plant_->set_discrete_contact_solver(DiscreteContactSolver::kTamsi);
-  //plant_->set_contact_model(ContactModel::kHydroelasticWithFallback);
+  // plant_->set_contact_model(ContactModel::kHydroelasticWithFallback);
   if (contact_solver == "sap") {
     plant_->set_discrete_contact_solver(DiscreteContactSolver::kSap);
   } else if (contact_solver == "tamsi") {
@@ -263,8 +255,7 @@ ManipulationStation<T>::ManipulationStation(double time_step, std::string contac
   } else if (contact_model == "hydroelastic_with_fallback") {
     plant_->set_contact_model(ContactModel::kHydroelasticWithFallback);
   } else {
-    throw std::runtime_error("Invalid contact model '" + contact_model +
-                             "'.");
+    throw std::runtime_error("Invalid contact model '" + contact_model + "'.");
   }
 
   this->set_name("manipulation_station");
@@ -272,10 +263,11 @@ ManipulationStation<T>::ManipulationStation(double time_step, std::string contac
 
 template <typename T>
 void ManipulationStation<T>::AddManipulandFromFile(
-    const std::string& model_file, const RigidTransform<double>& X_WObject, std::string manipuland_name) {
+    const std::string& model_file, const RigidTransform<double>& X_WObject,
+    std::string manipuland_name) {
   multibody::Parser parser(plant_);
   const auto model_index =
-      parser.AddModelFromFile(FindResourceOrThrow(model_file),manipuland_name);
+      parser.AddModelFromFile(FindResourceOrThrow(model_file), manipuland_name);
   const auto indices = plant_->GetBodyIndices(model_index);
   // Only support single-body objects for now.
   // Note: this could be generalized fairly easily... would just want to
@@ -288,28 +280,19 @@ void ManipulationStation<T>::AddManipulandFromFile(
 
 template <typename T>
 void ManipulationStation<T>::SetupCitoRlStation(
-  IiwaCollisionModel collision_model) {
-
+    IiwaCollisionModel collision_model) {
   DRAKE_DEMAND(setup_ == Setup::kNone);
   setup_ = Setup::kCitoRl;
 
-  // Add the table and 80/20 workcell frame.
   {
-    const double dx_table_center_to_robot_base = 1.2;
-    const double dz_table_top_robot_base = 0.15;
     const std::string sdf_path = FindResourceOrThrow(
-        "drake/examples/manipulation_station/models/"
-        "table.sdf");
-
-    RigidTransform<double> X_WT(
-        Vector3d(dx_table_center_to_robot_base, 0, dz_table_top_robot_base));
-    internal::AddAndWeldModelFrom(sdf_path, "table", plant_->world_frame(),
-                                  "table", X_WT, plant_);
+        "drake/examples/manipulation_station/models/floor.sdf");
+    RigidTransform<double> X_WT(Vector3d(1.5, 0.0, -2.5e-2));
+    internal::AddAndWeldModelFrom(sdf_path, "floor", plant_->world_frame(),
+                                  "floor", X_WT, plant_);
   }
 
   AddDefaultIiwa(collision_model);
-  //AddDefaultWsg(schunk_model);
-
 }
 
 template <typename T>
@@ -353,8 +336,7 @@ void ManipulationStation<T>::SetupClutterClearingStation(
 
 template <typename T>
 void ManipulationStation<T>::SetupManipulationClassStation(
-  IiwaCollisionModel collision_model,
-  SchunkCollisionModel schunk_model) {
+    IiwaCollisionModel collision_model, SchunkCollisionModel schunk_model) {
   DRAKE_DEMAND(setup_ == Setup::kNone);
   setup_ = Setup::kManipulationClass;
 
@@ -411,7 +393,7 @@ void ManipulationStation<T>::SetupManipulationClassStation(
 
 template <typename T>
 void ManipulationStation<T>::SetupPlanarIiwaStation(
-  SchunkCollisionModel schunk_model) {
+    SchunkCollisionModel schunk_model) {
   DRAKE_DEMAND(setup_ == Setup::kNone);
   setup_ = Setup::kPlanarIiwa;
 
@@ -477,7 +459,7 @@ void ManipulationStation<T>::SetDefaultState(
   // the IIWA state.
   SetIiwaPosition(station_context, state, GetIiwaPosition(station_context));
   SetIiwaVelocity(station_context, state, VectorX<T>::Zero(num_iiwa_joints()));
-  if (setup_ != Setup::kCitoRl){
+  if (setup_ != Setup::kCitoRl) {
     SetWsgPosition(station_context, state, q0_gripper);
     SetWsgVelocity(station_context, state, 0);
   }
@@ -514,7 +496,7 @@ void ManipulationStation<T>::SetRandomState(
   // the IIWA state.
   SetIiwaPosition(station_context, state, GetIiwaPosition(station_context));
   SetIiwaVelocity(station_context, state, VectorX<T>::Zero(num_iiwa_joints()));
-  if (setup_ != Setup::kCitoRl){
+  if (setup_ != Setup::kCitoRl) {
     SetWsgPosition(station_context, state, GetWsgPosition(station_context));
     SetWsgVelocity(station_context, state, 0);
   }
@@ -538,7 +520,7 @@ void ManipulationStation<T>::MakeIiwaControllerModel() {
   // (according to the sdf)... and we don't believe our inertia calibration
   // on the hardware to be so precise, so we simply ignore the inertia
   // contribution from the fingers here.
-  if (setup_ != Setup::kCitoRl){
+  if (setup_ != Setup::kCitoRl) {
     const multibody::RigidBody<T>& wsg_equivalent =
         owned_controller_plant_->AddRigidBody(
             "wsg_equivalent", controller_iiwa_model,
@@ -565,7 +547,7 @@ void ManipulationStation<T>::Finalize(
     std::map<std::string, std::unique_ptr<geometry::render::RenderEngine>>
         render_engines) {
   DRAKE_THROW_UNLESS(iiwa_model_.model_instance.is_valid());
-  if (setup_ != Setup::kCitoRl){
+  if (setup_ != Setup::kCitoRl) {
     DRAKE_THROW_UNLESS(wsg_model_.model_instance.is_valid());
   }
   MakeIiwaControllerModel();
@@ -630,8 +612,8 @@ void ManipulationStation<T>::Finalize(
       // and 6.
       q0_iiwa << 0.1, -1.2, 1.6;
 
-      std::uniform_real_distribution<symbolic::Expression> x(0.4, 0.8),
-          y(0, 0), z(0, 0.05);
+      std::uniform_real_distribution<symbolic::Expression> x(0.4, 0.8), y(0, 0),
+          z(0, 0.05);
       const Vector3<symbolic::Expression> xyz{x(), y(), z()};
       for (const auto& body_index : object_ids_) {
         const multibody::Body<T>& body = plant_->get_body(body_index);
@@ -747,8 +729,8 @@ void ManipulationStation<T>::Finalize(
     // position command input port.
     auto desired_state_from_position = builder.template AddSystem<
         systems::StateInterpolatorWithDiscreteDerivative>(
-            num_iiwa_positions, plant_->time_step(),
-            true /* suppress_initial_transient */);
+        num_iiwa_positions, plant_->time_step(),
+        true /* suppress_initial_transient */);
     desired_state_from_position->set_name("desired_state_from_position");
     builder.Connect(desired_state_from_position->get_output_port(),
                     iiwa_controller->get_input_port_desired_state());
@@ -760,11 +742,12 @@ void ManipulationStation<T>::Finalize(
     builder.ExportOutput(adder->get_output_port(), "iiwa_torque_measured");
   }
 
-  { 
-    if (setup_ != Setup::kCitoRl){
+  {
+    if (setup_ != Setup::kCitoRl) {
       auto wsg_controller = builder.template AddSystem<
           manipulation::schunk_wsg::SchunkWsgPositionController>(
-          manipulation::schunk_wsg::kSchunkWsgLcmStatusPeriod, wsg_kp_, wsg_kd_);
+          manipulation::schunk_wsg::kSchunkWsgLcmStatusPeriod, wsg_kp_,
+          wsg_kd_);
       wsg_controller->set_name("wsg_controller");
 
       builder.Connect(
@@ -779,22 +762,22 @@ void ManipulationStation<T>::Finalize(
                           "wsg_force_limit");
 
       auto wsg_mbp_state_to_wsg_state = builder.template AddSystem(
-          manipulation::schunk_wsg::MakeMultibodyStateToWsgStateSystem<double>());
+          manipulation::schunk_wsg::MakeMultibodyStateToWsgStateSystem<
+              double>());
       builder.Connect(plant_->get_state_output_port(wsg_model_.model_instance),
                       wsg_mbp_state_to_wsg_state->get_input_port());
 
       builder.ExportOutput(wsg_mbp_state_to_wsg_state->get_output_port(),
-                          "wsg_state_measured");
+                           "wsg_state_measured");
 
       builder.ExportOutput(wsg_controller->get_grip_force_output_port(),
-                          "wsg_force_measured");
+                           "wsg_force_measured");
     } else {
-      auto manipuland_pose_extractor=
-          builder.template AddSystem<
-            internal::ManipulandPoseExtractor<double>>(plant_);
-      builder.Connect(
-          plant_->get_geometry_poses_output_port(),
-          manipuland_pose_extractor->get_input_port());
+      auto manipuland_pose_extractor =
+          builder.template AddSystem<internal::ManipulandPoseExtractor<double>>(
+              plant_);
+      builder.Connect(plant_->get_geometry_poses_output_port(),
+                      manipuland_pose_extractor->get_input_port());
       builder.ExportOutput(manipuland_pose_extractor->get_output_port(),
                            "optitrack_manipuland_pose");
     }
@@ -828,15 +811,15 @@ void ManipulationStation<T>::Finalize(
       builder.Connect(scene_graph_->get_query_output_port(),
                       camera->query_object_input_port());
 
-      auto depth_to_cloud = builder.template AddSystem<
-          perception::DepthImageToPointCloud>(
+      auto depth_to_cloud =
+          builder.template AddSystem<perception::DepthImageToPointCloud>(
               camera->depth_camera_info(),
               systems::sensors::PixelType::kDepth16U,
               0.001f /* depth camera is in mm */,
-              perception::pc_flags::kXYZs |
-              perception::pc_flags::kRGBs);
-      auto x_pc_system = builder.template AddSystem<
-          systems::ConstantValueSource>(Value<RigidTransformd>(X_PC));
+              perception::pc_flags::kXYZs | perception::pc_flags::kRGBs);
+      auto x_pc_system =
+          builder.template AddSystem<systems::ConstantValueSource>(
+              Value<RigidTransformd>(X_PC));
       builder.Connect(camera->color_image_output_port(),
                       depth_to_cloud->color_image_input_port());
       builder.Connect(camera->depth_image_16U_output_port(),
@@ -857,8 +840,7 @@ void ManipulationStation<T>::Finalize(
 
   builder.ExportOutput(scene_graph_->get_query_output_port(), "query_object");
 
-  builder.ExportOutput(scene_graph_->get_query_output_port(),
-                       "geometry_query");
+  builder.ExportOutput(scene_graph_->get_query_output_port(), "geometry_query");
 
   builder.ExportOutput(plant_->get_contact_results_output_port(),
                        "contact_results");
@@ -1039,7 +1021,7 @@ template <typename T>
 void ManipulationStation<T>::RegisterRgbdSensor(
     const std::string& name, const multibody::Frame<T>& parent_frame,
     const RigidTransform<double>& X_PC,
-      const geometry::render::ColorRenderCamera& color_camera,
+    const geometry::render::ColorRenderCamera& color_camera,
     const geometry::render::DepthRenderCamera& depth_camera) {
   CameraInformation info;
   info.parent_frame = &parent_frame;
@@ -1059,12 +1041,12 @@ void ManipulationStation<T>::RegisterRgbdSensor(
   // properties so that the camera shows up in the visualizer.
   const geometry::SourceId source_id = plant_->get_source_id().value();
   for (const multibody::BodyIndex& body_index :
-           plant_->GetBodyIndices(model_index)) {
+       plant_->GetBodyIndices(model_index)) {
     const multibody::Body<T>& body = plant_->get_body(body_index);
     for (const geometry::GeometryId& geometry_id :
-             plant_->GetVisualGeometriesForBody(body)) {
+         plant_->GetVisualGeometriesForBody(body)) {
       scene_graph_->RemoveRole(source_id, geometry_id,
-          geometry::Role::kPerception);
+                               geometry::Role::kPerception);
     }
   }
 }
