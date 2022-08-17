@@ -4,24 +4,28 @@ by an optitrack setup with a Kuka iiwa arm both in simulation and on
 hardware.
 """
 import argparse
-import matplotlib.pyplot as plt
+import copy
 import numpy as np
 from utils import FindResource
 
 from drake.examples.manipulation_station.trajectory_planner import TrajectoryPlanner
+from pydrake.examples.manipulation_station import (
+    ManipulationStation, ManipulationStationHardwareInterface)
+from pydrake.geometry import (
+    CollisionFilterDeclaration, GeometrySet, Meshcat, MeshcatVisualizer)
 from pydrake.math import (RigidTransform, RollPitchYaw, RotationMatrix)
 from pydrake.multibody.parsing import Parser
 from pydrake.systems.analysis import (
     ApplySimulatorConfig, Simulator, SimulatorConfig)
 from pydrake.systems.framework import DiagramBuilder
-from pydrake.geometry import (
-    CollisionFilterDeclaration, GeometrySet, Meshcat, MeshcatVisualizer)
-from pydrake.examples.manipulation_station import (
-    ManipulationStation, ManipulationStationHardwareInterface)
+from pydrake.systems.primitives import PassThrough
+
+
+np.set_printoptions(precision=5)
 
 
 # Environment parameters
-sim_dt = 5e-3
+time_step = 1e-3
 table_height = 0.0
 target_offset_z = 0.1
 box_size = np.array([0.15, 0.15, 0.15])
@@ -76,14 +80,14 @@ def make_environment(meshcat=None, hardware=False, args=None):
     if hardware:
         camera_ids = []
         station = builder.AddSystem(ManipulationStationHardwareInterface(
-            camera_ids, False, True))
+            camera_ids, False, False))
         station.Connect(wait_for_cameras=False,
                         wait_for_wsg=False, wait_for_optitrack=False)
         controller_plant = station.get_controller_plant()
         plant = None
     else:
         station = builder.AddSystem(ManipulationStation(
-            time_step=sim_dt, contact_model=contact_model, contact_solver=contact_solver))
+            time_step=time_step, contact_model=contact_model, contact_solver=contact_solver))
         station.SetupCitoRlStation()
 
         station.AddManipulandFromFile(
@@ -103,6 +107,14 @@ def make_environment(meshcat=None, hardware=False, args=None):
                 query_object_port=geometry_query_port,
                 meshcat=meshcat)
 
+    # connect iiwa_position to the commanded pose
+    iiwa_position = builder.AddSystem(PassThrough(controller_plant.num_actuators()))
+    builder.Connect(iiwa_position.get_output_port(),
+                    station.GetInputPort("iiwa_position"))
+    builder.ExportInput(iiwa_position.get_input_port(),
+                        "iiwa_position_commanded")
+
+    # build the diagram
     diagram = builder.Build()
 
     return diagram, plant, controller_plant, station
@@ -134,10 +146,10 @@ def simulate_diagram(diagram, plant, controller_plant, station,
     context = simulator.get_mutable_context()
     context.SetTime(0)
 
-    sim_t = 0
+    time_tracker = 0
     if hardware:
-        sim_t += 1e-6
-        simulator.AdvanceTo(sim_t)
+        time_tracker += 1e-12
+        simulator.AdvanceTo(time_tracker)
     else:
         # set the system pose to the prescribed values
         plant.SetPositions(plant_context, np.hstack(
@@ -146,47 +158,66 @@ def simulate_diagram(diagram, plant, controller_plant, station,
     # get the initial pose from the robot
     q0_arm = station.GetOutputPort("iiwa_position_measured").Eval(
         station_context)
+    # keep the arm at the measured pose
+    diagram.GetInputPort("iiwa_position_commanded").FixValue(
+        diagram_context, np.array(q0_arm))
+    # time_tracker += 1
+    # simulator.AdvanceTo(time_tracker)
+    print(q0_arm)
     # get the box pose from the mo-cap
-    q0_box = station.GetOutputPort(
-        "optitrack_manipuland_pose").Eval(station_context)
-    # set the initial pose of the system
-    q0 = np.hstack((q0_arm, 1, 0, 0, 0, q0_box.translation()[0],
-                    q0_box.translation()[1], box_size[2]/2))
+    # q0_box = station.GetOutputPort(
+    #     "optitrack_manipuland_pose").Eval(station_context)
+    # # set the initial pose of the system
+    # q0 = np.hstack((q0_arm, 1, 0, 0, 0, q0_box.translation()[0],
+    #                 q0_box.translation()[1], box_size[2]/2))
+    q0 = np.hstack((q0_arm, 1, 0, 0, 0, 1, 0, 0.075))
+
 
     # plan a trajectory
     planner = TrajectoryPlanner(q0, desired_box_pos[4], args.preview)
     plan = planner.plan()
 
     # check for user permit
-    user_permit = input("\n\tWould you like to run this trajectory? (y/N)")
+    user_permit = input("\n\tWould you like to run this trajectory? (y/N) ")
     if user_permit != 'y':
         return 0
 
     # run a simulation executing the planned trajectory
     if not hardware:
         simulator.Initialize()
-        input("\nPress Enter to run the simulation...")
-        for _ in range(int(simulation_time/sim_dt)):
-            sim_t += sim_dt
-            q_cmd = plan.value(sim_t)
-            station.GetInputPort("iiwa_position").FixValue(
+        input("\n\nPress Enter to run the simulation...")
+        for _ in range(int(simulation_time/time_step)):
+            time_tracker += time_step
+            q_cmd = plan.value(time_tracker)
+            station.GetInputPort("iiwa_position_commanded").FixValue(
                 station_context, q_cmd)
-            print(f"\tt: {sim_t}, qpos: {q_cmd.T}")
-            simulator.AdvanceTo(sim_t)
+            print(f"\tt: {time_tracker}, qpos: {q_cmd.T}")
+            simulator.AdvanceTo(time_tracker)
         print("\nThe simulation has been completed")
         return 1
 
     # otherwise, command joint poses based on the time
     input("Press Enter to start the execution...\n\n")
     cur_time_s = -1
-    start_time_us = station.GetOutputPort("iiwa_utime").Eval(station_context)
-    while cur_time_s < 10:
+    time_tracker += 3
+    simulator.AdvanceTo(time_tracker)
+    # input("After first advance")
+    start_time_us = copy.copy(station.GetOutputPort("iiwa_utime").Eval(station_context))
+    print(start_time_us)
+    while cur_time_s < 5:
+        time_tracker += time_step
+        simulator.AdvanceTo(time_tracker)
+        # input("After looped advance")
+        cur_time_us = copy.copy(station.GetOutputPort('iiwa_utime').Eval(station_context))
+        # print(f"Start time: {int(start_time_us)}, cur time: {int(cur_time_us)}")
         # evaluate the time from the start in s
-        cur_time_s = (station.GetOutputPort("iiwa_utime").Eval(station_context) -
-                      start_time_us) / 1e6
+        cur_time_s = (cur_time_us - start_time_us) / 1e6
         # evaluate the corresponding joint pose command
         q_cmd = plan.value(cur_time_s)
-        print(f"\ttime: {cur_time_s}, cmd: {q_cmd}")
+        print(f"time: {cur_time_s[0]}, cmd: {q_cmd[:, 0].T}")
+        # send the command
+        station.GetInputPort("iiwa_position").FixValue(
+            station_context, q_cmd)
     print("\nCompleted the execution")
     return 1
 
