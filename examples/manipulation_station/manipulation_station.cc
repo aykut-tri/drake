@@ -539,7 +539,6 @@ void ManipulationStation<T>::MakeIiwaControllerModel() {
   // on the hardware to be so precise, so we simply ignore the inertia
   // contribution from the fingers here.
   if (setup_ != Setup::kCitoRl){
-    std::cout << "here2" <<std::endl;
     const multibody::RigidBody<T>& wsg_equivalent =
         owned_controller_plant_->AddRigidBody(
             "wsg_equivalent", controller_iiwa_model,
@@ -567,12 +566,9 @@ void ManipulationStation<T>::Finalize(
         render_engines) {
   DRAKE_THROW_UNLESS(iiwa_model_.model_instance.is_valid());
   if (setup_ != Setup::kCitoRl){
-    std::cout << "here000" <<std::endl;
     DRAKE_THROW_UNLESS(wsg_model_.model_instance.is_valid());
   }
-  std::cout << "here00" <<std::endl;
   MakeIiwaControllerModel();
-  std::cout << "here0" <<std::endl;
 
   // Note: This deferred diagram construction method/workflow exists because we
   //   - cannot finalize plant until all of my objects are added, and
@@ -644,7 +640,6 @@ void ManipulationStation<T>::Finalize(
       break;
     }
   }
-  std::cout << "here" <<std::endl;
   // Set the iiwa default configuration.
   const auto iiwa_joint_indices =
       plant_->GetJointIndices(iiwa_model_.model_instance);
