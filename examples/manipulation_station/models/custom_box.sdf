@@ -2,7 +2,7 @@
 <sdf version="1.7">
   <model name="custom_box">
   
-    <link name="base_link_box">
+    <link name="base_link">
       <inertial>
         <mass>0.2</mass>
         <inertia>
