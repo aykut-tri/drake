@@ -29,6 +29,7 @@ namespace manipulation_station {
 /// - wsg_position
 /// - wsg_force_limit (optional)
 /// output_ports:
+/// - iiwa_utime
 /// - iiwa_position_commanded
 /// - iiwa_position_measured
 /// - iiwa_velocity_estimated

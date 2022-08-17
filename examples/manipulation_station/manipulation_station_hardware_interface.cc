@@ -97,6 +97,9 @@ ManipulationStationHardwareInterface::ManipulationStationHardwareInterface(
           "IIWA_STATUS", lcm));
 
   builder.ExportOutput(
+      iiwa_status_receiver->get_utime_output_port(),
+      "iiwa_utime");
+  builder.ExportOutput(
       iiwa_status_receiver->get_position_commanded_output_port(),
       "iiwa_position_commanded");
   builder.ExportOutput(
