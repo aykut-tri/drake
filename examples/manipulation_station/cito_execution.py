@@ -15,7 +15,7 @@ from pydrake.systems.analysis import (
     ApplySimulatorConfig, Simulator, SimulatorConfig)
 from pydrake.systems.framework import DiagramBuilder
 from pydrake.geometry import (
-    Box, CollisionFilterDeclaration, GeometrySet, Meshcat, MeshcatVisualizer)
+    CollisionFilterDeclaration, GeometrySet, Meshcat, MeshcatVisualizer)
 from pydrake.examples.manipulation_station import (
     ManipulationStation, ManipulationStationHardwareInterface)
 
@@ -29,11 +29,10 @@ box_mass = 1
 box_mu = 1.0
 contact_model = 'point'
 contact_solver = 'sap'
-desired_box_pos = [
-    1.0,
-    0.5*(np.random.random()-0.5),
-    0.8*(np.random.random()-0.5),
-]
+initial_arm_pos = np.array(
+    [0.32050248, 0.28234945, 0.33277261, 0.27744095, 0.26174226, 0.29629105, 0.30471719])
+initial_box_pos = np.array([1, 0, 0, 0, 0.6, 0, 0.075])
+desired_box_pos = np.array([1, 0, 0, 0, 1, 0, 0.075])
 
 
 def AddTargetPosVisuals(plant, xyz_position, color=[.8, .1, .1, 1.0]):
@@ -41,12 +40,11 @@ def AddTargetPosVisuals(plant, xyz_position, color=[.8, .1, .1, 1.0]):
     marker = parser.AddModelFromFile(FindResource("models/cross.sdf"))
     plant.WeldFrames(
         plant.world_frame(), plant.GetFrameByName("cross", marker),
-        RigidTransform(RollPitchYaw(0, 0, 0),
-                       np.array(xyz_position)
-                       )
-    )
+        RigidTransform(RollPitchYaw(0, 0, 0), np.array(xyz_position)))
 
 # filter collisison between parent and child of each joint.
+
+
 def add_collision_filters(scene_graph, plant):
     filter_manager = scene_graph.collision_filter_manager()
     body_pairs = [
@@ -73,7 +71,7 @@ def add_collision_filters(scene_graph, plant):
 def make_environment(meshcat=None, hardware=False, args=None):
     builder = DiagramBuilder()
 
-    target_position = [desired_box_pos[0], desired_box_pos[1], table_height]
+    target_position = desired_box_pos[4:7]
 
     if hardware:
         camera_ids = []
@@ -89,10 +87,8 @@ def make_environment(meshcat=None, hardware=False, args=None):
         station.SetupCitoRlStation()
 
         station.AddManipulandFromFile(
-            "drake/examples/manipulation_station/models/"
-            + "061_foam_brick.sdf",
-            RigidTransform(RotationMatrix.Identity(), [0.6, 0, 0.15]),
-            "box")
+            "drake/examples/manipulation_station/models/custom_box.sdf",
+            RigidTransform(RotationMatrix.Identity(), np.zeros(3)), "box")
 
         controller_plant = station.get_controller_plant()
         plant = station.get_multibody_plant()
@@ -112,49 +108,6 @@ def make_environment(meshcat=None, hardware=False, args=None):
     return diagram, plant, controller_plant, station
 
 
-def set_home(simulator, diagram_context, plant, home_manipuland=False, manipuland_names=[]):
-    # pdb.set_trace()
-    diagram = simulator.get_system()
-
-    plant_context = diagram.GetMutableSubsystemContext(plant,
-                                                       diagram_context)
-
-    home_positions = [
-        ('iiwa_joint_1', 0.1*(np.random.random()-0.5)+0.3),
-        ('iiwa_joint_2', 0.1*(np.random.random()-0.5)+0.3),
-        ('iiwa_joint_3', 0.1*(np.random.random()-0.5)+0.3),
-        ('iiwa_joint_4', 0.1*(np.random.random()-0.5)+0.3),
-        ('iiwa_joint_5', 0.1*(np.random.random()-0.5)+0.3),
-        ('iiwa_joint_6', 0.1*(np.random.random()-0.5)+0.3),
-        ('iiwa_joint_7', 0.1*(np.random.random()-0.5)+0.3),
-    ]
-
-    # ensure the positions are within the joint limits
-    for pair in home_positions:
-        joint = plant.GetJointByName(pair[0])
-        if joint.type_name() == "revolute":
-            joint.set_angle(plant_context,
-                            np.clip(pair[1],
-                                    joint.position_lower_limit(),
-                                    joint.position_upper_limit()
-                                    )
-                            )
-    if home_manipuland:
-        for manipuland_name in manipuland_names:
-            box = plant.GetBodyByName("manipuland_name")
-
-            box_pose = RigidTransform(
-                RollPitchYaw(0, 0.1, 0),
-                np.array(
-                    [
-                        0.75+0.1*(np.random.random()-0.5),
-                        0+0.25*(np.random.random()-0.5),
-                        box_size[2]/2+0.005+table_height,
-                    ])
-            )
-            plant.SetFreeBodyPose(plant_context, box, box_pose)
-
-
 def simulate_diagram(diagram, plant, controller_plant, station,
                      simulation_time, target_realtime_rate, hardware=False,
                      args=None, differential_ik=None):
@@ -168,7 +121,7 @@ def simulate_diagram(diagram, plant, controller_plant, station,
 
     simulator = Simulator(diagram, diagram_context)
 
-    ApplySimulatorConfig(simulator, simulator_config)
+    ApplySimulatorConfig(config=simulator_config, simulator=simulator)
     station_context = diagram.GetMutableSubsystemContext(
         station, simulator.get_mutable_context())
 
@@ -186,31 +139,57 @@ def simulate_diagram(diagram, plant, controller_plant, station,
         sim_t += 1e-6
         simulator.AdvanceTo(sim_t)
     else:
-        set_home(simulator, context, plant, home_manipuland=False)
-        simulator.Initialize()
+        # set the system pose to the prescribed values
+        plant.SetPositions(plant_context, np.hstack(
+            (initial_arm_pos, initial_box_pos)))
 
-    # get the initial pose
+    # get the initial pose from the robot
     q0_arm = station.GetOutputPort("iiwa_position_measured").Eval(
         station_context)
-    q0_box = station.GetOutputPort("optitrack_manipuland_pose").Eval( station_context)
+    # get the box pose from the mo-cap
+    q0_box = station.GetOutputPort(
+        "optitrack_manipuland_pose").Eval(station_context)
+    # set the initial pose of the system
     q0 = np.hstack((q0_arm, 1, 0, 0, 0, q0_box.translation()[0],
                     q0_box.translation()[1], box_size[2]/2))
 
     # plan a trajectory
-    planner = TrajectoryPlanner(q0, desired_box_pos[0], args.preview)
+    planner = TrajectoryPlanner(q0, desired_box_pos[4], args.preview)
     plan = planner.plan()
 
-    # wait for initialization
-    input("\nReady to run simulation?")
-    for _ in range(int(simulation_time/sim_dt)):
-        sim_t += sim_dt
-        q_cmd = plan.value(sim_t)
-        station.GetInputPort("iiwa_position").FixValue(
-            station_context, q_cmd)
-        print(f"\tt: {sim_t}, qpos: {q_cmd.T}")
-        simulator.AdvanceTo(sim_t)
+    # check for user permit
+    user_permit = input("Do you want to run this trajectory? (y/N)")
+    if user_permit != 'y':
+        return 0
 
+    # run a simulation executing the planned trajectory
+    if not hardware:
+        simulator.Initialize()
+        input("\nPress Enter to run the simulation...")
+        for _ in range(int(simulation_time/sim_dt)):
+            sim_t += sim_dt
+            q_cmd = plan.value(sim_t)
+            station.GetInputPort("iiwa_position").FixValue(
+                station_context, q_cmd)
+            print(f"\tt: {sim_t}, qpos: {q_cmd.T}")
+            simulator.AdvanceTo(sim_t)
+        print("\nThe simulation has been completed")
+        return 1
+
+    # otherwise, command joint poses based on the time
+    input("Press Enter to start the execution...\n\n")
+    cur_time_s = -1
+    start_time_us = station.GetOutputPort("iiwa_utime").Eval(station_context)
+    while cur_time_s < 10:
+        # evaluate the time from the start in s
+        cur_time_s = (station.GetOutputPort("iiwa_utime").Eval(station_context) -
+                      start_time_us) / 1e6
+        # evaluate the corresponding joint pose command
+        q_cmd = plan.value(cur_time_s)
+        print(f"\ttime: {cur_time_s}, cmd: {q_cmd}")
+    print("\nCompleted the execution")
     return 1
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
