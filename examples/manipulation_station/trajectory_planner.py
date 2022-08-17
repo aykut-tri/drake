@@ -5,13 +5,12 @@ from pydrake.common import FindResourceOrThrow
 from pydrake.geometry import (MeshcatVisualizer, SceneGraph, StartMeshcat)
 from pydrake.math import RigidTransform
 from pydrake.multibody.parsing import Parser
-from pydrake.multibody.plant import (AddMultibodyPlantSceneGraph, MultibodyPlant)
+from pydrake.multibody.plant import (
+    AddMultibodyPlantSceneGraph, MultibodyPlant)
 from pydrake.solvers import (BoundingBoxConstraint, IpoptSolver, SnoptSolver)
 from pydrake.systems.framework import DiagramBuilder
 from pydrake.systems.trajectory_optimization import DirectCollocation
 from pydrake.trajectories import PiecewisePolynomial
-
-from utils import FindResource
 
 
 class TrajectoryPlanner():
@@ -30,7 +29,8 @@ class TrajectoryPlanner():
         self.diagram = builder.Build()
         # Create contexts
         self.diagram_context = self.diagram.CreateDefaultContext()
-        self.plant_context = self.plant.GetMyContextFromRoot(self.diagram_context)
+        self.plant_context = self.plant.GetMyContextFromRoot(
+            self.diagram_context)
 
         # Visualize the initial pose
         self.diagram_context.SetDiscreteState(
@@ -93,7 +93,8 @@ class TrajectoryPlanner():
         )
         Parser(plant).AddModelFromFile(model_file)
         # Attach the base to the world frame and complete the plant definition
-        plant.WeldFrames(plant.world_frame(), plant.GetFrameByName("iiwa_link_0"))
+        plant.WeldFrames(plant.world_frame(),
+                         plant.GetFrameByName("iiwa_link_0"))
         plant.Finalize()
         # Create a context for the plant
         context = plant.CreateDefaultContext()
@@ -138,7 +139,8 @@ class TrajectoryPlanner():
         # Set an initial guess by interpolating between the initial and final states
         initial_x_trajectory = PiecewisePolynomial.FirstOrderHold(
             [0., 2.], np.column_stack((x0, xf)))
-        dircol.SetInitialTrajectory(PiecewisePolynomial(), initial_x_trajectory)
+        dircol.SetInitialTrajectory(
+            PiecewisePolynomial(), initial_x_trajectory)
 
         # Solve the program
         solver = SnoptSolver()
@@ -156,22 +158,28 @@ class TrajectoryPlanner():
         x = dircol.GetStateSamples(result)
         return (t, x)
 
-
     def build_environment(self, add_manipuland=False):
         # Add a table (i.e., a box) and fix it to the world
-        Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/floor.sdf"))
+        sdf_file = FindResourceOrThrow(
+            "drake/examples/manipulation_station/models/floor.sdf")
+        Parser(self.plant, self.scene).AddModelFromFile(sdf_file)
         self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
-                            frame_on_child_M=self.plant.GetFrameByName("floor"),
-                            X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
+                              frame_on_child_M=self.plant.GetFrameByName(
+                                  "floor"),
+                              X_FM=RigidTransform(p=[1.5, 0.0, -2.5e-2]))
         # Add an iiwa and fix its base to the world
-        Parser(self.plant, self.scene).AddModelFromFile(
-            FindResource("models/iiwa14_point_end_effector.sdf"))
+        sdf_file = FindResourceOrThrow(
+            "drake/examples/manipulation_station/models/iiwa14_point_end_effector.sdf")
+        Parser(self.plant, self.scene).AddModelFromFile(sdf_file)
         self.plant.WeldFrames(frame_on_parent_F=self.plant.world_frame(),
-                              frame_on_child_M=self.plant.GetFrameByName("iiwa_link_0"),
+                              frame_on_child_M=self.plant.GetFrameByName(
+                                  "iiwa_link_0"),
                               X_FM=RigidTransform(p=[0.0, 0.0, 0.0]))
         # Add the manipuland
         if add_manipuland:
-            Parser(self.plant, self.scene).AddModelFromFile(FindResource("models/custom_box.sdf"))
+            sdf_file = FindResourceOrThrow(
+                "drake/examples/manipulation_station/models/custom_box.sdf")
+            Parser(self.plant, self.scene).AddModelFromFile(sdf_file)
         # Finalize the plant
         self.plant.Finalize()
 
@@ -190,7 +198,7 @@ class TrajectoryPlanner():
         for pair_id, pair in enumerate(all_contact_pairs):
             if pair_id in contact_candidate_ids:
                 self.contact_candidates.append(pair)
-                
+
         # Process the resulting contact candidates
         print("Contact candidates for planning:")
         for pair_id, pair in enumerate(self.contact_candidates):
@@ -201,7 +209,7 @@ class TrajectoryPlanner():
             self.X_AGa.append(self.inspector.GetPoseInFrame(pair[0]))
             self.X_BGb.append(self.inspector.GetPoseInFrame(pair[1]))
             # Get the pair ID for the iiwa-box contact
-            if (self.inspector.GetName(pair[0]) == "custom_box::push_point_collision" or 
-            self.inspector.GetName(pair[1]) == "custom_box::push_point_collision"):
+            if (self.inspector.GetName(pair[0]) == "custom_box::push_point_collision" or
+                    self.inspector.GetName(pair[1]) == "custom_box::push_point_collision"):
                 self.pair_id_iiwa_box = pair_id
         print(f"Pair ID for the iiwa-box contact: {self.pair_id_iiwa_box}")
