@@ -65,15 +65,16 @@ class TrajectoryPlanner():
 
         # Preview the planned trajectory
         if self.preview:
-            input("\nReady to preview the planned trajectory?\n")
+            input("\nPress Enter to preview the planned trajectory...\n")
             for i, t in enumerate(time):
                 print(f"t = {t}")
                 print(f"\tq = {states[:7, i]}")
                 print(f"\tv = {states[7:, i]}")
                 self.diagram_context.SetDiscreteState(states[:, i])
                 self.diagram.Publish(self.diagram_context)
-                input("Press Enter to continue...")
-            print("The preview is completed")
+                if t != time[-1]:
+                    input("Press Enter to continue...")
+            print("The preview is completed\n")
 
         # Smoothen and return the position trajectory
         plan = PiecewisePolynomial.CubicWithContinuousSecondDerivatives(

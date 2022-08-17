@@ -158,7 +158,7 @@ def simulate_diagram(diagram, plant, controller_plant, station,
     plan = planner.plan()
 
     # check for user permit
-    user_permit = input("Do you want to run this trajectory? (y/N)")
+    user_permit = input("\n\tWould you like to run this trajectory? (y/N)")
     if user_permit != 'y':
         return 0
 
@@ -210,8 +210,6 @@ if __name__ == "__main__":
         visualizer = meshcat_server
     else:
         visualizer = None
-
-    input("Press Enter to continue...")
 
     diagram, plant, controller_plant, station = make_environment(
         meshcat=visualizer, hardware=args.hardware, args=args)
