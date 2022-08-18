@@ -33,8 +33,9 @@ box_mass = 1
 box_mu = 1.0
 contact_model = 'point'
 contact_solver = 'sap'
-initial_arm_pos = np.array(
-    [0.32050248, 0.28234945, 0.33277261, 0.27744095, 0.26174226, 0.29629105, 0.30471719])
+# initial_arm_pos = np.array(
+#     [0.32050248, 0.28234945, 0.33277261, 0.27744095, 0.26174226, 0.29629105, 0.30471719])
+initial_arm_pos = np.zeros(7)
 initial_box_pos = np.array([1, 0, 0, 0, 0.6, 0, 0.075])
 desired_box_pos = np.array([1, 0, 0, 0, 1, 0, 0.075])
 
@@ -189,8 +190,8 @@ def simulate_diagram(diagram, plant, controller_plant, station,
         for _ in range(int(simulation_time/time_step)):
             time_tracker += time_step
             q_cmd = plan.value(time_tracker)
-            station.GetInputPort("iiwa_position_commanded").FixValue(
-                station_context, q_cmd)
+            diagram.GetInputPort("iiwa_position_commanded").FixValue(
+                diagram_context, q_cmd)
             print(f"\tt: {time_tracker}, qpos: {q_cmd.T}")
             simulator.AdvanceTo(time_tracker)
         print("\nThe simulation has been completed")
@@ -247,4 +248,4 @@ if __name__ == "__main__":
 
     simulate_diagram(
         diagram, plant, controller_plant, station,
-        10.0, 1.0, hardware=args.hardware, args=args)
+        5.0, 1.0, hardware=args.hardware, args=args)
