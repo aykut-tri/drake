@@ -26,21 +26,22 @@ from pydrake.systems.primitives import PassThrough
 # Set the numpy print precision
 np.set_printoptions(precision=5)
 
+# Desired joint pose of the arm
+# desired_arm_pos = np.array([0, 0, 0, np.pi/2, 0, -np.pi/2, 0])
+# desired_arm_pos = np.array([0, 0, 0, -np.pi/2, 0, np.pi/2, 0])
+desired_arm_pos = np.array([-0.2, 0.79, 0.32, -1.76, -0.36, 0.64, -0.73])
+
+# A scale in [0.5, 1] to cut down the joint position, velocity, and effort limits
+arm_limit_scale = 0.7
 
 # Environment parameters
-time_step = 1e-3
-table_height = 0.0
-target_offset_z = 0.1
-box_size = np.array([0.15, 0.15, 0.15])
-box_mass = 1
-box_mu = 1.0
-contact_model = 'point'
-contact_solver = 'sap'
-# initial_arm_pos = np.array(
-#     [0.32050248, 0.28234945, 0.33277261, 0.27744095, 0.26174226, 0.29629105, 0.30471719])
+desired_box_pos = np.array([1, 0, 0, 0, 1, 0, 0.075])
 initial_arm_pos = np.zeros(7)
 initial_box_pos = np.array([1, 0, 0, 0, 0.6, 0, 0.075])
-desired_box_pos = np.array([1, 0, 0, 0, 1, 0, 0.075])
+time_step = 1e-3
+box_height = 0.15
+contact_model = 'point'
+contact_solver = 'sap'
 
 
 def AddTargetPosVisuals(plant, xyz_position, color=[.8, .1, .1, 1.0]):
@@ -181,14 +182,15 @@ def simulate_diagram(diagram, plant, controller_plant, station,
             "optitrack_manipuland_pose").Eval(station_context)
         # set the initial pose of the system
         q0 = np.hstack((q0_arm, 1, 0, 0, 0, q0_box.translation()[0],
-                        q0_box.translation()[1], box_size[2]/2))
+                        q0_box.translation()[1], box_height/2))
     else:
         q0 = np.hstack((q0_arm, 1, 0, 0, 0, 1, 0, 0.075))
 
 
     # plan a trajectory
-    planner = TrajectoryPlanner(q0, desired_box_pos[4], args.preview)
-    plan = planner.plan()
+    planner = TrajectoryPlanner(
+        initial_pose=q0, preview=args.preview, limit_scale=arm_limit_scale)
+    plan = planner.plan_to_joint_pose(q_goal=desired_arm_pos)
 
     # check for user permit
     user_permit = input("\n\tWould you like to run this trajectory? (y/N) ")

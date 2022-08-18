@@ -7,17 +7,18 @@ from pydrake.math import RigidTransform
 from pydrake.multibody.parsing import Parser
 from pydrake.multibody.plant import (
     AddMultibodyPlantSceneGraph, MultibodyPlant)
-from pydrake.solvers import (BoundingBoxConstraint, IpoptSolver, SnoptSolver)
+from pydrake.solvers import (BoundingBoxConstraint, SnoptSolver)
 from pydrake.systems.framework import DiagramBuilder
 from pydrake.systems.trajectory_optimization import DirectCollocation
 from pydrake.trajectories import PiecewisePolynomial
 
 
 class TrajectoryPlanner():
-    def __init__(self, initial_pose, desired_box_x, preview=False):
+    def __init__(self, initial_pose, preview=False, limit_scale=0.75):
+        # Parse input args
         self.q0 = initial_pose
-        self.xd = desired_box_x
         self.preview = preview
+        self.limit_scale = min(max(0.5, limit_scale), 1.0)
         # Create the environment
         builder = DiagramBuilder()
         self.plant, self.scene = AddMultibodyPlantSceneGraph(builder, 5e-2)
@@ -37,31 +38,9 @@ class TrajectoryPlanner():
             np.hstack((self.q0[:7], np.zeros(self.plant.num_velocities()))))
         self.diagram.Publish(self.diagram_context)
 
-        # # Create ports and objects for collision computations
-        # self.query_port = self.plant.get_geometry_query_input_port()
-        # self.query_object = self.query_port.Eval(self.plant_context)
-        # self.inspector = self.query_object.inspector()
-
-        # # Specify the indices of the desired contact pairs
-        # contact_candidate_ids = [0, 3, 5, 7, 9]
-        # # Get the contact candidates
-        # self.contact_candidates = []
-        # self.X_AGa = []
-        # self.X_BGb = []
-        # self.pair_id_iiwa_box = None
-        # self.get_contact_candidates(contact_candidate_ids=contact_candidate_ids,
-        #                             print_all=False)
-
-        # # Create AutoDiffXd correspondences
-        # diagram_ad = diagram.ToAutoDiffXd()
-        # diagram_context_ad = diagram_ad.CreateDefaultContext()
-        # self.plant_ad = diagram_ad.GetSubsystemByName(self.plant.get_name())
-        # self.plant_context_ad = self.plant_ad.GetMyContextFromRoot(diagram_context_ad)
-
-    def plan(self):
+    def plan_to_joint_pose(self, q_goal):
         # Plan a trajectory to the desired joint pose
-        time, states = self.plan_to_joint_pose(
-            q_goal=np.array([0, 0, 0, -np.pi/2, 0, np.pi/2, 0]), num_time_samples=31)
+        time, states = self.solve_dircol(q_goal=q_goal, num_time_samples=31)
 
         # Preview the planned trajectory
         if self.preview:
@@ -83,7 +62,7 @@ class TrajectoryPlanner():
         # x_int = plan.vector_values(t_int)
         return plan
 
-    def plan_to_joint_pose(self, q_goal, num_time_samples=11):
+    def solve_dircol(self, q_goal, num_time_samples=11):
         # Build a continuous-time plant and a scene
         plant = MultibodyPlant(0)
         scene_graph = SceneGraph()
@@ -123,15 +102,14 @@ class TrajectoryPlanner():
 
 
         # Add joint position, velocity, and effort constraints
-        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(0.8*plant.GetPositionLowerLimits(),
-                                                                  0.8*plant.GetPositionUpperLimits()),
-                                            x[:7])
-        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(0.7*plant.GetVelocityLowerLimits(),
-                                                                  0.7*plant.GetVelocityUpperLimits()),
-                                            x[7:])
-        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(0.7*plant.GetEffortLowerLimits(),
-                                                                  0.7*plant.GetEffortUpperLimits()),
-                                            u)
+        dircol.AddConstraintToAllKnotPoints(
+            BoundingBoxConstraint(self.limit_scale*plant.GetPositionLowerLimits(),
+                                  self.limit_scale*plant.GetPositionUpperLimits()), x[:7])
+        dircol.AddConstraintToAllKnotPoints(
+            BoundingBoxConstraint(self.limit_scale*plant.GetVelocityLowerLimits(),
+                                  self.limit_scale*plant.GetVelocityUpperLimits()), x[7:])
+        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(self.limit_scale*plant.GetEffortLowerLimits(),
+                                  self.limit_scale*plant.GetEffortUpperLimits()), u)
 
         # Penalize the total time
         dircol.AddFinalCost(dircol.time())
@@ -157,13 +135,13 @@ class TrajectoryPlanner():
         print("\nRunning trajectory optimization...\n")
         t_start = time.time()
         result = solver.Solve(prog)
-        # Print solver details
+        # Print result details
         print(f"\tSolver type: {result.get_solver_id().name()}")
         print(f"\tSolver took {time.time() - t_start} s")
         print(f"\tSuccess: {result.is_success()}")
         print(f"\tOptimal cost: {result.get_optimal_cost()}")
 
-        # Get the solution
+        # Sample and return the solution
         t = dircol.GetSampleTimes(result)
         x = dircol.GetStateSamples(result)
         return (t, x)
@@ -192,34 +170,3 @@ class TrajectoryPlanner():
             Parser(self.plant, self.scene).AddModelFromFile(sdf_file)
         # Finalize the plant
         self.plant.Finalize()
-
-    def get_contact_candidates(self, contact_candidate_ids, print_all=False):
-        # Get all contact pairs
-        all_contact_pairs = self.inspector.GetCollisionCandidates()
-        if print_all:
-            print("All collision pairings:")
-            for pair_id, pair in enumerate(all_contact_pairs):
-                print(f"\tPair {pair_id}")
-                print(f"\t\t{pair[0]}: {self.inspector.GetName(pair[0])}")
-                print(f"\t\t{pair[1]}: {self.inspector.GetName(pair[1])}")
-
-        # Get the desired contact pairs
-        self.contact_candidates = []
-        for pair_id, pair in enumerate(all_contact_pairs):
-            if pair_id in contact_candidate_ids:
-                self.contact_candidates.append(pair)
-
-        # Process the resulting contact candidates
-        print("Contact candidates for planning:")
-        for pair_id, pair in enumerate(self.contact_candidates):
-            print(f"\tPair {pair_id}")
-            print(f"\t\t{pair[0]}: {self.inspector.GetName(pair[0])}")
-            print(f"\t\t{pair[1]}: {self.inspector.GetName(pair[1])}")
-            # Get the collision geometry's pose in the body frame
-            self.X_AGa.append(self.inspector.GetPoseInFrame(pair[0]))
-            self.X_BGb.append(self.inspector.GetPoseInFrame(pair[1]))
-            # Get the pair ID for the iiwa-box contact
-            if (self.inspector.GetName(pair[0]) == "custom_box::push_point_collision" or
-                    self.inspector.GetName(pair[1]) == "custom_box::push_point_collision"):
-                self.pair_id_iiwa_box = pair_id
-        print(f"Pair ID for the iiwa-box contact: {self.pair_id_iiwa_box}")
