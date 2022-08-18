@@ -5,6 +5,7 @@ hardware.
 """
 import argparse
 import copy
+import matplotlib.pyplot as plt
 import numpy as np
 from utils import FindResource
 
@@ -17,10 +18,12 @@ from pydrake.math import (RigidTransform, RollPitchYaw, RotationMatrix)
 from pydrake.multibody.parsing import Parser
 from pydrake.systems.analysis import (
     ApplySimulatorConfig, Simulator, SimulatorConfig)
+from pydrake.systems.drawing import plot_system_graphviz
 from pydrake.systems.framework import DiagramBuilder
 from pydrake.systems.primitives import PassThrough
 
 
+# Set the numpy print precision
 np.set_printoptions(precision=5)
 
 
@@ -117,6 +120,11 @@ def make_environment(meshcat=None, hardware=False, args=None):
 
     # build the diagram
     diagram = builder.Build()
+    if args.plot_diagram:
+        plt.figure()
+        plot_system_graphviz(diagram, max_depth=2)
+        plt.plot(1)
+        plt.show(block=False)
 
     return diagram, plant, controller_plant, station
 
@@ -235,6 +243,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--preview", action="store_true",
         help="Preview the planned trajectory before execution.")
+    parser.add_argument(
+        "--plot_diagram", action="store_true",
+        help="Plot the diagram flowchart.")
     args = parser.parse_args()
 
     if args.meshcat:
