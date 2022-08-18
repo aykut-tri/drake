@@ -166,6 +166,15 @@ drake_py_library(
     ],
 )
 
+drake_py_library(
+    name = "trajectory_planner",
+    srcs = ["trajectory_planner.py"],
+    visibility = ["//visibility:private"],
+    deps = [
+        "//bindings/pydrake",
+    ],
+)
+
 drake_py_binary(
     name = "joint_teleop",
     srcs = ["joint_teleop.py"],
@@ -197,6 +206,16 @@ drake_py_binary(
     deps = [
         "//bindings/pydrake",
         ":differential_ik",
+    ],
+)
+
+drake_py_binary(
+    name = "trajectory_execution",
+    srcs = ["trajectory_execution.py"],
+    deps = [
+        "//bindings/pydrake",
+        ":differential_ik",
+        ":trajectory_planner",
     ],
 )
 
