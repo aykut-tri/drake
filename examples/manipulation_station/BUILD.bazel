@@ -274,8 +274,8 @@ drake_py_binary(
 )
 
 drake_py_binary(
-    name = "cito_execution",
-    srcs = ["cito_execution.py"],
+    name = "trajectory_execution",
+    srcs = ["trajectory_execution.py"],
     deps = [
         "//bindings/pydrake",
         ":differential_ik",
