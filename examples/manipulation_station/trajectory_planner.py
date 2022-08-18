@@ -61,7 +61,7 @@ class TrajectoryPlanner():
     def plan(self):
         # Plan a trajectory to the desired joint pose
         time, states = self.plan_to_joint_pose(
-            q_goal=np.array([0, 0, 0, -np.pi/2, 0, np.pi/2, 0]), num_time_samples=21)
+            q_goal=np.array([0, 0, 0, -np.pi/2, 0, np.pi/2, 0]), num_time_samples=31)
 
         # Preview the planned trajectory
         if self.preview:
@@ -108,9 +108,11 @@ class TrajectoryPlanner():
 
         # Get the associated mathematical program
         prog = dircol.prog()
+        x = dircol.state()
+        u = dircol.input()
 
-        # Enforce equally-divided time segments
-        dircol.AddEqualTimeIntervalsConstraints()
+        # # Enforce equally-divided time segments
+        # dircol.AddEqualTimeIntervalsConstraints()
 
         # Specify the task
         x0 = np.hstack((self.q0[:7], np.zeros(7)))
@@ -119,23 +121,30 @@ class TrajectoryPlanner():
         prog.AddBoundingBoxConstraint(x0, x0, dircol.initial_state())
         prog.AddBoundingBoxConstraint(xf, xf, dircol.final_state())
 
-        # Add joint position, velocity, and effort constraints
-        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(plant.GetPositionLowerLimits(),
-                                                                  plant.GetPositionUpperLimits()),
-                                            dircol.state()[:7])
-        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(plant.GetVelocityLowerLimits(),
-                                                                  plant.GetVelocityUpperLimits()),
-                                            dircol.state()[7:])
-        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(plant.GetEffortLowerLimits(),
-                                                                  plant.GetEffortUpperLimits()),
-                                            dircol.input())
 
-        # # Penalize the total time
-        # dircol.AddFinalCost(dircol.time())
+        # Add joint position, velocity, and effort constraints
+        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(0.8*plant.GetPositionLowerLimits(),
+                                                                  0.8*plant.GetPositionUpperLimits()),
+                                            x[:7])
+        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(0.7*plant.GetVelocityLowerLimits(),
+                                                                  0.7*plant.GetVelocityUpperLimits()),
+                                            x[7:])
+        dircol.AddConstraintToAllKnotPoints(BoundingBoxConstraint(0.7*plant.GetEffortLowerLimits(),
+                                                                  0.7*plant.GetEffortUpperLimits()),
+                                            u)
+
+        # Penalize the total time
+        dircol.AddFinalCost(dircol.time())
+
+        # Penalize the velocities
+        w_vel = 0
+        if w_vel > 0:
+            dircol.AddRunningCost(w_vel * x[7:].dot(x[7:]))
 
         # Penalize the effort
-        u = dircol.input()
-        dircol.AddRunningCost(u.dot(u))
+        w_tau = 1
+        if w_tau > 0:
+            dircol.AddRunningCost(w_tau * u.dot(u))
 
         # Set an initial guess by interpolating between the initial and final states
         initial_x_trajectory = PiecewisePolynomial.FirstOrderHold(
