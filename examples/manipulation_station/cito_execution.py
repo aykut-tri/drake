@@ -245,6 +245,9 @@ if __name__ == "__main__":
         help="Use the ManipulationStationHardwareInterface instead of an "
              "in-process simulation.")
     parser.add_argument(
+        "--mocap", action="store_true",
+        help="Use the Optitrack detections instead of hard-coded box pose.")
+    parser.add_argument(
         "--preview", action="store_true",
         help="Preview the planned trajectory before execution.")
     parser.add_argument(
