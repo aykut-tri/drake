@@ -152,12 +152,14 @@ def simulate_diagram(diagram, plant, controller_plant, station,
         print("Initial state variables: ",
               plant.GetPositionsAndVelocities(plant_context))
 
+    # get the simulator data
     context = simulator.get_mutable_context()
     context.SetTime(0)
 
+    # advance the simulation for handling messages in the hardware case
     time_tracker = 0
     if hardware:
-        time_tracker += 1e-12
+        time_tracker += 1e-6
         simulator.AdvanceTo(time_tracker)
     else:
         # set the system pose to the prescribed values
@@ -165,21 +167,23 @@ def simulate_diagram(diagram, plant, controller_plant, station,
             (initial_arm_pos, initial_box_pos)))
 
     # get the initial pose from the robot
+    q0 = []
     q0_arm = station.GetOutputPort("iiwa_position_measured").Eval(
         station_context)
     # keep the arm at the measured pose
     diagram.GetInputPort("iiwa_position_commanded").FixValue(
         diagram_context, np.array(q0_arm))
-    # time_tracker += 1
-    # simulator.AdvanceTo(time_tracker)
-    print(q0_arm)
+    time_tracker += 1
+    simulator.AdvanceTo(time_tracker)
     # get the box pose from the mo-cap
-    # q0_box = station.GetOutputPort(
-    #     "optitrack_manipuland_pose").Eval(station_context)
-    # # set the initial pose of the system
-    # q0 = np.hstack((q0_arm, 1, 0, 0, 0, q0_box.translation()[0],
-    #                 q0_box.translation()[1], box_size[2]/2))
-    q0 = np.hstack((q0_arm, 1, 0, 0, 0, 1, 0, 0.075))
+    if args.mocap:
+        q0_box = station.GetOutputPort(
+            "optitrack_manipuland_pose").Eval(station_context)
+        # set the initial pose of the system
+        q0 = np.hstack((q0_arm, 1, 0, 0, 0, q0_box.translation()[0],
+                        q0_box.translation()[1], box_size[2]/2))
+    else:
+        q0 = np.hstack((q0_arm, 1, 0, 0, 0, 1, 0, 0.075))
 
 
     # plan a trajectory
