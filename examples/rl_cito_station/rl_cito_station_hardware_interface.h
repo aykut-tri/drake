@@ -27,6 +27,7 @@ namespace rl_cito_station {
 /// - iiwa_position
 /// - iiwa_feedforward_torque
 /// output_ports:
+/// - iiwa_utime
 /// - iiwa_position_commanded
 /// - iiwa_position_measured
 /// - iiwa_velocity_estimated
