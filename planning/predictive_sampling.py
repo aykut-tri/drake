@@ -5,16 +5,16 @@ import numpy as np
 import pydrake.all as pd
 
 # Deviation of the normal distribution.
-SIGMA = 0.01
+SIGMA = 0.1
 # Number of rollouts.
-NR = 100
+NR = 10
 
 # Dynamic time step size [s].
-dt = 5e-3
+dt = 1e-2
 # Control time step size [s].
-tc = 1e-2
+tc = 1e-1
 # Prection horizon for the controller.
-N = 10
+N = 20
 # Total duration of a rollout [s].
 T = (N + 1) * tc
 
@@ -28,18 +28,19 @@ NU = 1
 qd = np.array([np.pi, 0.0])
 
 # Initial state.
-Q0 = np.array([np.pi, 0.0])
+Q0 = np.array([0., 0.])
 V0 = np.array([0.0, 0.0])
 X0 = np.hstack((Q0, V0))
 
 # Cost weights.
 wui = 1e-3
-wvi = 1e0
-wqi = 1e2
-wqf = 1e6
+wvi = 1e-2
+wvf = 1e0
+wqi = 1e1
+wqf = 1e2
 
 
-def wrap_angles_rad(q):
+def wrap_angles(q):
     return (q + np.pi) % (2*np.pi) - np.pi
 
 
@@ -50,13 +51,13 @@ def eval_cost(X, U):
     for i in range(N):
         cost += wui * U[:, i].T @ U[:, i]
         cost += wvi * V[i].T @ V[i]
-        cost += wqi * (qd - Q[i]).T @ (qd - Q[i])
-    cost += wvi * V[N].T @ V[N]
-    cost += wqf * (qd - Q[N]).T @ (qd - Q[N])
+        cost += wqi * wrap_angles(qd - Q[i]).T @ wrap_angles(qd - Q[i])
+    cost += wvf * V[N].T @ V[N]
+    cost += wqf * wrap_angles(qd - Q[N]).T @ wrap_angles(qd - Q[N])
     return cost
 
 
-def rollout(diagram, simulator, context, x0, U0):
+def rollout(diagram, simulator, context, x0, U0, perturb=True):
     context.SetTime(0.0)
     simulator.Initialize()
     context.SetDiscreteState(x0)
@@ -65,27 +66,36 @@ def rollout(diagram, simulator, context, x0, U0):
     X = np.tile(x0, (N+1, 1))
     U = copy.copy(U0)
     for i in range(N):
-        U[:, i] = np.random.normal(U0[:, i], SIGMA, (NU, 1))
+        if perturb:
+            U[:, i] = np.random.normal(U0[:, i], SIGMA, (NU, 1))
         diagram.get_input_port(0).FixValue(context, U[:, i])
         sim_t = sim_t + tc
         simulator.AdvanceTo(sim_t)
         X[i + 1] = state.CopyToVector()
-        X[i + 1][:NQ] = wrap_angles_rad(X[i + 1][:NQ])
+        X[i + 1][:NQ] = X[i + 1][:NQ]
     return X, U
 
 def run_controller(diagram, simulator, context, x0, U0):
     # Initialize.
-    min_cost = 1e20
-    Uopt = None
-    Xopt = None
+    X, U = rollout(diagram, simulator, context, x0, U0, perturb=False)
+    min_cost = eval_cost(X, U)
+    Uopt = copy.copy(U0)
+    # Also try the shifted control trajectory.
+    U = np.delete(U0, 0, 1)
+    U = np.hstack((U, U[:, [-1]]))
+    X, _ = rollout(diagram, simulator, context, x0, U, perturb=False)
+    cost = eval_cost(X, U)
+    if cost < min_cost:
+        min_cost = copy.copy(cost)
+        U0 = copy.copy(U)
+        Uopt = copy.copy(U)
     # Run the rollouts.
-    for i in range(NR):
+    for _ in range(NR):
         X, U = rollout(diagram, simulator, context, x0, U0)
         cost = eval_cost(X, U)
         if cost <= min_cost:
             min_cost = copy.copy(cost)
             Uopt = copy.copy(U)
-            Xopt = copy.copy(X)
         # print(f"Rollout {i}\n")
         # print(f"Cost: {cost}")
     # Print the best sample.
@@ -149,7 +159,6 @@ t_steps = 0
 while t_steps < 1e4:
     # Get the current state.
     x_curr = state.CopyToVector()
-    x_curr[:NQ] = wrap_angles_rad(x_curr[:NQ])
     print(f"\tCurrent state: {x_curr}")
     # Run predictive sampling.
     Ups = run_controller(
@@ -157,13 +166,12 @@ while t_steps < 1e4:
         x_curr, U0)
     # Apply the first control input.
     diagram.get_input_port(0).FixValue(context, Ups[:, 0])
+    # Update the initial control trajectory.
+    U0 = copy.copy(Ups)
     # Take a control time step.
     sim_t = sim_t + dt
     simulator.AdvanceTo(sim_t)
     print(f"Time: {sim_t} s")
-    # Shift the control trajectory.
-    U0 = np.delete(Ups, 0, 1)
-    U0 = np.hstack((U0, U0[:, [-1]]))
     # Count the number of time steps.
     t_steps = t_steps + 1
     # input()
