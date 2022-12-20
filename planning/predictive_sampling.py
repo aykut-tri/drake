@@ -16,7 +16,7 @@ tc = 1e-1
 # Prection horizon for the controller.
 N = 20
 # Total duration of a rollout [s].
-T = (N + 1) * tc
+T = N * tc
 
 # Plant properties.
 NQ = 2
@@ -25,19 +25,19 @@ NX = NQ + NV
 NU = 1
 
 # Desired state and weights.
-qd = np.array([np.pi, 0.0])
+QD = np.array([np.pi, 0.0])
 
 # Initial state.
-Q0 = np.array([0., 0.])
+Q0 = np.array([0.0, 0.0])
 V0 = np.array([0.0, 0.0])
 X0 = np.hstack((Q0, V0))
 
 # Cost weights.
 wui = 1e-3
 wvi = 1e-2
-wvf = 1e0
-wqi = 1e1
-wqf = 1e2
+wvf = 1e2
+Q_qi = 1e0 * np.eye(NQ)
+Q_qf = 1e3 * np.eye(NQ)
 
 
 def wrap_angles(q):
@@ -51,9 +51,9 @@ def eval_cost(X, U):
     for i in range(N):
         cost += wui * U[:, i].T @ U[:, i]
         cost += wvi * V[i].T @ V[i]
-        cost += wqi * wrap_angles(qd - Q[i]).T @ wrap_angles(qd - Q[i])
+        cost += wrap_angles(QD - Q[i]).T @ Q_qi @ wrap_angles(QD - Q[i])
     cost += wvf * V[N].T @ V[N]
-    cost += wqf * wrap_angles(qd - Q[N]).T @ wrap_angles(qd - Q[N])
+    cost += wrap_angles(QD - Q[N]).T @ Q_qf @ wrap_angles(QD - Q[N])
     return cost
 
 
@@ -65,14 +65,31 @@ def rollout(diagram, simulator, context, x0, U0, perturb=True):
     sim_t = 0.0
     X = np.tile(x0, (N+1, 1))
     U = copy.copy(U0)
-    for i in range(N):
-        if perturb:
-            U[:, i] = np.random.normal(U0[:, i], SIGMA, (NU, 1))
-        diagram.get_input_port(0).FixValue(context, U[:, i])
-        sim_t = sim_t + tc
+    # Perturb the control inputs.
+    if perturb:
+        for i in range(N):
+                U[:, i] = np.random.normal(U0[:, i], SIGMA, (NU, 1))
+    # Fit a polynomial given the control knots.
+    # U_traj = pd.PiecewisePolynomial.FirstOrderHold(np.arange(0, T, tc), U)
+    U_traj = pd.PiecewisePolynomial.CubicWithContinuousSecondDerivatives(
+        np.arange(0, T, tc), U, np.zeros(NU), np.zeros(NU))
+    # Rollout the control trajectory.
+    dynamic_step = 0
+    control_step = 0
+    for t in np.arange(0, T, dt):
+        # Evaluate the control polynomial at the current time.
+        u = U_traj.value(t)
+        # Set the control input.
+        diagram.get_input_port(0).FixValue(context, u)
+        # Go to the next dynamic time step.
+        sim_t = sim_t + dt
         simulator.AdvanceTo(sim_t)
-        X[i + 1] = state.CopyToVector()
-        X[i + 1][:NQ] = X[i + 1][:NQ]
+        # Count the number of steps.
+        dynamic_step = dynamic_step + 1
+        # Get the state at the knots.
+        if dynamic_step > 0 and (dynamic_step % int(tc / dt)) == 0:
+            X[control_step + 1] = state.CopyToVector()
+            control_step = control_step + 1
     return X, U
 
 def run_controller(diagram, simulator, context, x0, U0):
@@ -152,11 +169,11 @@ context.SetDiscreteState(X0)
 # Set the initial control trajectory.
 U0 = np.zeros((NU, N))
 
-# Run and record a simulation.
+# Run and record a simulation until a pre-set time limit.
 visualizer.StartRecording(set_transforms_while_recording=True)
 sim_t = 0.0
 t_steps = 0
-while t_steps < 1e4:
+while sim_t < 60.0:
     # Get the current state.
     x_curr = state.CopyToVector()
     print(f"\tCurrent state: {x_curr}")
