@@ -5,16 +5,16 @@ import numpy as np
 import pydrake.all as pd
 
 # Deviation of the normal distribution.
-SIGMA = 0.1
+SIGMA = 5.0
 # Number of rollouts.
-NR = 10
+NR = 5
 
 # Dynamic time step size [s].
 dt = 1e-2
 # Control time step size [s].
-tc = 1e-1
+tc = 5e-2
 # Prection horizon for the controller.
-N = 20
+N = 10
 # Total duration of a rollout [s].
 T = N * tc
 
@@ -25,7 +25,7 @@ NX = NQ + NV
 NU = 1
 
 # Desired state and weights.
-QD = np.array([np.pi, 0.0])
+QD = np.array([0.0, np.pi])
 
 # Initial state.
 Q0 = np.array([0.0, 0.0])
@@ -33,11 +33,19 @@ V0 = np.array([0.0, 0.0])
 X0 = np.hstack((Q0, V0))
 
 # Cost weights.
-wui = 1e-3
-wvi = 1e-2
+wui = 1e-4
+wvi = 1e-0
 wvf = 1e2
-Q_qi = 1e0 * np.eye(NQ)
-Q_qf = 1e3 * np.eye(NQ)
+Q_qi = np.array([[1e2, 0.0], [0.0, 1e1]])
+Q_qf = np.array([[1e4, 0.0], [0.0, 1e3]])
+
+
+task = "acrobot"
+task = "cart-pole"
+if task == "cart-pole":
+    REV_JNT_IDX = [1]
+else:
+    REV_JNT_IDX = [0, 1]
 
 
 def wrap_angles(q):
@@ -51,9 +59,13 @@ def eval_cost(X, U):
     for i in range(N):
         cost += wui * U[:, i].T @ U[:, i]
         cost += wvi * V[i].T @ V[i]
-        cost += wrap_angles(QD - Q[i]).T @ Q_qi @ wrap_angles(QD - Q[i])
+        q_e = QD - Q[i]
+        q_e[REV_JNT_IDX] = wrap_angles(q_e[REV_JNT_IDX])
+        cost += q_e.T @ Q_qi @ q_e
     cost += wvf * V[N].T @ V[N]
-    cost += wrap_angles(QD - Q[N]).T @ Q_qf @ wrap_angles(QD - Q[N])
+    qf_e = QD - Q[N]
+    qf_e[REV_JNT_IDX] = wrap_angles(qf_e[REV_JNT_IDX])
+    cost += qf_e.T @ Q_qf @ qf_e
     return cost
 
 
@@ -123,17 +135,26 @@ def run_controller(diagram, simulator, context, x0, U0):
     return Uopt
 
 # Find the model file.
-file_name = pd.FindResourceOrThrow(
-    "drake/examples/acrobot/Acrobot_no_collision.urdf")
+if task == "acrobot":
+    file_name = pd.FindResourceOrThrow(
+        "drake/examples/acrobot/Acrobot_no_collision.urdf")
+elif task == "cart-pole":
+    file_name = pd.FindResourceOrThrow(
+        "drake/examples/multibody/cart_pole/cart_pole.sdf")
+else:
+    print("Please select a task.")
 
 # Build a system for simulation.
 builder = pd.DiagramBuilder()
 plant, scene = pd.AddMultibodyPlantSceneGraph(builder, dt)
 # Load the plant.
 pd.Parser(plant).AddModels(file_name)
-plant.WeldFrames(
-    plant.world_frame(), plant.GetFrameByName("base_link"))
+if task == "acrobot":
+    plant.WeldFrames(
+        plant.world_frame(), plant.GetFrameByName("base_link"))
 plant.Finalize()
+
+
 # Set the input port to the plant's actuation.
 builder.ExportInput(plant.get_actuation_input_port())
 # Add a meshcat visualizer.
@@ -148,9 +169,10 @@ simulator = pd.Simulator(diagram)
 builder = pd.DiagramBuilder()
 controller_plant = builder.AddSystem(pd.MultibodyPlant(dt))
 pd.Parser(controller_plant).AddModels(file_name)
-controller_plant.WeldFrames(
-    controller_plant.world_frame(),
-    controller_plant.GetFrameByName("base_link"))
+if task == "acrobot":
+    controller_plant.WeldFrames(
+        controller_plant.world_frame(),
+        controller_plant.GetFrameByName("base_link"))
 controller_plant.Finalize()
 # Set the input port to the plant's actuation.
 builder.ExportInput(controller_plant.get_actuation_input_port())
