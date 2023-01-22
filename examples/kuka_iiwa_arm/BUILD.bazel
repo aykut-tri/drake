@@ -155,6 +155,25 @@ drake_cc_binary(
     ],
 )
 
+drake_cc_binary(
+    name = "run_lqr",
+    srcs = ["run_lqr.cc"],
+    data = [
+        ":models",
+        "//manipulation/models/iiwa_description:models",
+    ],
+    deps = [
+        ":iiwa_common",
+        "//common:find_resource",
+        "//common:add_text_logging_gflags",
+        "//multibody/parsing",
+        "//systems/analysis:simulator",
+        "//systems/controllers:linear_quadratic_regulator",
+        "//systems/primitives:affine_system",
+        "//visualization:visualization_config_functions",
+    ],
+)
+
 alias(
     name = "models",
     actual = "//examples/kuka_iiwa_arm/models:models",
