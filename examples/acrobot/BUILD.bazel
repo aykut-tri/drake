@@ -211,6 +211,17 @@ drake_cc_binary(
     ],
 )
 
+drake_py_binary(
+    name = "run_scvx",
+    srcs = ["run_scvx.py"],
+    deps = [
+        "//bindings/pydrake",
+    ],
+    data = [
+        "//multibody/benchmarks/acrobot:models",
+    ],
+)
+
 drake_cc_binary(
     name = "run_lqr_w_estimator",
     testonly = 1,
